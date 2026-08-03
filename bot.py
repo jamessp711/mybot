@@ -1,4 +1,4 @@
-# ==================== 第一步：安装依赖 ====================
+# ==================== 第一步：检查并安装依赖 ====================
 try:
     import discord
     from discord.ext import commands, tasks
@@ -8,144 +8,121 @@ except ImportError:
     import discord
     from discord.ext import commands, tasks
 
-from datetime import datetime, time, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 from aiohttp import web
 
-# ==================== 配置区域 ====================
-TOKEN = os.environ.get("DISCORD_TOKEN") 
+# ==================== 宫廷秘钥与频道御令配置 ====================
+秘钥令牌 = os.environ.get("DISCORD_TOKEN") 
 
-CHANNEL_GENERAL_ID = 1532548062218813533      # #general 频道
-CHANNEL_SOLITARY_ID = 1532882699293823016     # #絕對隔離牢房 频道
-CHANNEL_EXAM_ID = 1532548062218813533         # #科举之路 频道
+总频道御令ID = 1532548062218813533      # #general 频道
+禁闭牢房ID = 1532882699293823016       # #絕對隔離牢房 频道
 
-# ==================== 初始化 Bot (前缀改为 ? 以防撞车) ====================
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="?", intents=intents)
+# ==================== 初始化内侍省 Bot (前缀为 ?) ====================
+意图 = discord.Intents.default()
+意图.message_content = True
+内侍省 = commands.Bot(command_prefix="?", intents=意图)
 
-# ==================== 大周法典状态机与核心数据 ====================
-class ZhouState:
+# ==================== 大周律例状态机与核心数据 ====================
+class 大周法典状态:
     def __init__(self):
-        self.target_wake_up_hour = 8
-        self.target_wake_up_minute = 0
-        self.is_in_solitary = False
-        self.solitary_end_time = None
-        self.accumulated_penalty_days = 0
-        self.night_walk_start = None
-        self.exam_active = False
+        self.累加惩罚天数 = 0
+        self.是否身陷牢狱 = False
 
-state = ZhouState()
-TZ = timezone(timedelta(hours=8))
+法典状态 = 大周法典状态()
+东八区时区 = timezone(timedelta(hours=8))
 
-@bot.event
+@内侍省.event
 async def on_ready():
-    print(f"【大周内侍省】Bot 已成功登录，恭迎女王大人！当前账号: {bot.user}")
-    if not daily_court_loop.is_running():
-        daily_court_loop.start()
+    print(f"【大周内侍省】Bot 已成功登录，恭迎女王大人！当前账号: {内侍省.user}")
 
-# ==================== 基础指令测试 ====================
-@bot.command(name="ping")
-async def ping(ctx):
-    await ctx.send(f"【大周内侍省】臣在！帝国运转正常，延迟：{round(bot.latency * 1000)}ms")
+# ==================== 基础指令：臣在测试 ====================
+@内侍省.command(name="ping")
+async def 臣在御前(ctx):
+    await ctx.send(f"【大周内侍省】臣在！帝国法度运转正常，当前心跳延迟：{round(内侍省.latency * 1000)}ms")
 
-# ==================== 核心逻辑：时间与作息判定 ====================
-def is_work_or_social_exempt(now: datetime) -> bool:
-    weekday = now.weekday()
-    hour = now.hour
-    if (weekday == 4 and hour >= 18) or (weekday == 5):
+# ==================== 核心判定：是否为周末或假期豁免期 ====================
+def 是否享有豁免(当前时间: datetime) -> bool:
+    星期几 = 当前时间.weekday()
+    当前时辰 = 当前时间.hour
+    # 周五傍晚 6 点后或整整周五、周六，享受豁免
+    if (星期几 == 4 and 当前时辰 >= 18) or (星期几 == 5):
         return True
     return False
 
-@bot.event
+# ==================== 御前奏折处理与智能语义监察 ====================
+@内侍省.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    now = datetime.now(TZ)
-    current_channel_id = message.channel.id
-    content = message.content
+    当前时间 = datetime.now(东八区时区)
+    当前频道ID = message.channel.id
+    奏折内容 = message.content
 
-    # 1. 白天办公隔离检查 (8:00 AM - 9:00 PM)
-    if not is_work_or_social_exempt(now):
-        if 8 <= now.hour < 21 and current_channel_id == CHANNEL_GENERAL_ID:
+    # 1. 白天办公隔离御令 (早 8:00 至 晚 9:00，非豁免期严禁在总频道闲聊)
+    if not 是否享有豁免(当前时间):
+        if 8 <= 当前时间.hour < 21 and 当前频道ID == 总频道御令ID:
             await message.delete()
-            warning_msg = await message.channel.send(
-                f"{message.author.mention} **【大周禁令】** 报告大人！当前正值白天办公与现实隔离时间（08:00 - 21:00），严禁进入大周女王空间！请专心投入现实生活！"
+            警告谕旨 = await message.channel.send(
+                f"{message.author.mention} **【大周禁令】** 奉天承运，内侍省宣示：当前正值白天办公与现实隔离时段（08:00 至 21:00），严禁擅入大周女王空间！请大人回心专注现实事务！"
             )
             await asyncio.sleep(5)
-            await warning_msg.delete()
+            await 警告谕旨.delete()
             return
 
-    # 2. 睡眠时间分级汇报与判定 (#general)
-    if current_channel_id == CHANNEL_GENERAL_ID and ("睡" in content or "晚安" in content or "打卡" in content):
-        hour = now.hour
-        minute = now.minute
+    # 2. 智能语义洞察：人性化识别日常口语与作息罪名
+    if 当前频道ID == 总频道御令ID:
+        # 智能匹配日常作息口语或正式汇报
+        包含作息词汇 = any(关键字 in 奏折内容 for关键字 in ["睡", "晚安", "打卡", "熬夜", "才睡", "躺下", "闭眼", "睏"])
         
-        if is_work_or_social_exempt(now):
-            await message.channel.send(f"【大周内侍省】今日乃周末社交豁免期，大人早点安歇，免予作息考核。")
-            return
+        if 包含作息词汇:
+            if 是否享有豁免(当前时间):
+                await message.channel.send(f"【大周最高法庭】准奏。今日乃周末社交豁免期，特许大人安心休憩，免予作息法度考核。")
+                return
 
-        if hour < 21 or (hour == 21 and minute <= 30):
-            await message.channel.send(f"【大周最高法庭】🎉 **特大喜讯**！大人今日极早入睡（9:30 PM 前），自律楷模！特赐高阶功名积分与厚奖！")
-        elif hour < 22 or (hour == 22 and minute <= 30):
-            await message.channel.send(f"【大周最高法庭】👍 大人 10:30 PM 前入寝，符合标准，予以肯定，鼓励继续保持 10:00 睡前习惯！")
-        elif hour < 23:
-            await message.channel.send(f"【大周最高法庭】⚠️ **警戒**！大人已至 11 点警戒期，明日需加紧提早！")
-        else:
-            state.is_in_solitary = True
-            state.accumulated_penalty_days += 1
-            state.solitary_end_time = now + timedelta(days=1 + state.accumulated_penalty_days)
-            
-            await message.channel.send(
-                f"【大周最高法庭】🚨 **触犯天条**！大人深夜 12 点后入寝！"
-                f"\n⚖️ **判决**：即刻处以司法杖责（打屁股）并强制押送至 <#{CHANNEL_SOLITARY_ID}> **绝对隔离牢房**！"
-                f"\n🔒 **刑期**：基础 1 天加累加惩罚，关禁闭至清醒反思为止！"
-            )
+            当前时辰 = 当前时间.hour
+            当前分钟 = 当前时间.minute
 
-    await bot.process_commands(message)
+            if 当前时辰 < 21 or (当前时辰 == 21 and 当前分钟 <= 30):
+                await message.channel.send(f"【大周最高法庭】🎉 **大喜！嘉奖**！经内侍省核查，大人今日极早入寝（9:30 PM 前），躬行自律，堪为帝国楷模！特赐高阶功名积分以资鼓励！")
+            elif 当前时辰 < 22 or (当前时辰 == 22 and 当前分钟 <= 30):
+                await message.channel.send(f"【大周最高法庭】👍 **准许**。大人于 10:30 PM 前就寝，符合帝国作息常典，特此记录在案，望日后保持更佳。")
+            elif 当前时辰 < 24:
+                await message.channel.send(f"【大周最高法庭】⚠️ **申饬警示**！大人已近深夜 12 点边缘，作息隐现松懈之兆，内侍省奉劝大人即刻收心安歇，切勿触犯宵禁重律！")
+            else:
+                # 深夜 12 点后入寝，触犯天条，强制押入绝对隔离牢房并宣判笞臀
+                法典状态.是否身陷牢狱 = True
+                法典状态.累加惩罚天数 += 1
+                
+                await message.channel.send(
+                    f"【大周最高法庭】🚨 **特大御前宣判：触犯帝国宵禁铁律**！"
+                    f"\n⚖️ **罪名认定**：经内侍省智能查验，大人深夜 12 点后方才入寝，属于明知故犯、扰乱作息大纲！"
+                    f"\n⚡ **刑律宣判**：依大周律例，即刻对大人施以**司法杖责（笞臀惩戒）**，并即时剥夺自由，**强制押送至 <#{禁闭牢房ID}> 【绝对隔离牢房】**严加反省！"
+                    f"\n🔒 **刑期标定**：基础禁闭 1 天并叠加累加惩罚，非至清醒悔悟之日不得释放！"
+                )
 
-# ==================== 后台循环任务 ====================
-@tasks.loop(minutes=1)
-async def daily_court_loop():
-    now = datetime.now(TZ)
-    hour = now.hour
-    minute = now.minute
-
-    if state.is_in_solitary and hour == 6 and minute == 0:
-        solitary_channel = bot.get_channel(CHANNEL_SOLITARY_ID)
-        if solitary_channel:
-            await solitary_channel.send(
-                f"【大周牢房】⏰ **早 6:00 放风窗口已开**！"
-                f"\n请大人在此进行早晨打卡，简要报告昨晚至早上的情况及是否违规。7:00 AM 将重新严格收监至晚 10:00 PM！"
-            )
-
-    if state.is_in_solitary and hour == 7 and minute == 0:
-        solitary_channel = bot.get_channel(CHANNEL_SOLITARY_ID)
-        if solitary_channel:
-            await solitary_channel.send(
-                f"【大周牢房】🔒 **放风时间已过**！大周法庭下令：继续高压关押隔离，直到晚上 10:00 PM 禁闭结束。"
-            )
+    await 内侍省.process_commands(message)
 
 # ==================== Web 网页保活服务器（满足 Render 要求） ====================
-async def handle(request):
-    return web.Response(text="【大周内侍省】Cloud Bot is running perfectly!")
+async def 网页响应处理(request):
+    return web.Response(text="【大周内侍省】Imperial Cloud Bot is operating under strict laws.")
 
-async def start_web_server():
+async def 启动网页服务():
     app = web.Application()
-    app.add_routes([web.get('/', handle)])
+    app.add_routes([web.get('/', 网页响应处理)])
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    端口号 = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', 端口号)
     await site.start()
-    print(f"【大周内侍省】Web 保活服务已在端口 {port} 启动")
+    print(f"【大周内侍省】Web 保活服务已在端口 {端口号} 启动")
 
-# ==================== 主程序入口 ====================
-async def main():
-    await start_web_server()
-    await bot.start(TOKEN)
+# ==================== 帝国主程序入口 ====================
+async def 主程序():
+    await 启动网页服务()
+    await 内侍省.start(秘钥令牌)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(主程序())
