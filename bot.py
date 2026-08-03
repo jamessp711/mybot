@@ -20,10 +20,10 @@ CHANNEL_GENERAL_ID = 1532548062218813533      # #general 频道
 CHANNEL_SOLITARY_ID = 1532882699293823016     # #絕對隔離牢房 频道
 CHANNEL_EXAM_ID = 1532548062218813533         # #科举之路 频道
 
-# ==================== 初始化 Bot ====================
+# ==================== 初始化 Bot (前缀改为 ? 以防撞车) ====================
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="?", intents=intents)
 
 # ==================== 大周法典状态机与核心数据 ====================
 class ZhouState:
