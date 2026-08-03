@@ -11,6 +11,7 @@ except ImportError:
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
+import random
 from aiohttp import web
 
 # ==================== 宫廷秘钥与频道御令配置 ====================
@@ -46,7 +47,6 @@ async def 臣在御前(ctx):
 def 是否享有豁免(当前时间: datetime) -> bool:
     星期几 = 当前时间.weekday()
     当前时辰 = 当前时间.hour
-    # 周五傍晚 6 点后或整整周五、周六，享受豁免
     if (星期几 == 4 and 当前时辰 >= 18) or (星期几 == 5):
         return True
     return False
@@ -72,10 +72,27 @@ async def on_message(message):
             await 警告谕旨.delete()
             return
 
-    # 2. 智能语义洞察：人性化识别日常口语与作息罪名
+    # 2. 智能语义洞察：人性化识别“主动认错”与“作息违规”
     if 当前频道ID == 总频道御令ID:
-        # 智能匹配日常作息口语或正式汇报
-        包含作息词汇 = any(关键字 in 奏折内容 for关键字 in ["睡", "晚安", "打卡", "熬夜", "才睡", "躺下", "闭眼", "睏"])
+        
+        # A. 检测大人是否在“主动认错/招供” (如：我犯错了、我错了、对不起等)
+        包含认错词汇 = any(词 in 奏折内容 for 词 in ["犯错", "错了", "负罪", "请罪", "打我", "罚我"])
+        
+        if 包含认错词汇:
+            法典状态.是否身陷牢狱 = True
+            法典状态.累加惩罚天数 += 1
+            
+            # 充满威严、人性化、带有女王风范的随机斥责语录
+            斥责台词库 = [
+                f"【大周最高法庭】大胆女王大人！既然知道自己犯了错，**还不速速跪下！** 罪名既定，内侍省即刻宣判：施以**司法杖责（笞臀惩戒）**，并即时押入 <#{禁闭牢房ID}> 【绝对隔离牢房】反省思过！",
+                f"【大周最高法庭】哼！知错能改善莫大焉，但**犯了错还敢不跪下领罪？** 来人！依大周律例，重打五十大板（笞臀），并即刻将大人锁入 <#{禁闭牢房ID}> 【绝对隔离牢房】禁闭一天！",
+                f"【大周最高法庭】台下可是女王大人？既然口称犯错，可见心中尚存敬畏。**还不给本官跪好！** 念其主动坦白，轻判笞臀惩戒一次，即刻发配 <#{禁闭牢房ID}> 【绝对隔离牢房】闭门思过！"
+            ]
+            await message.channel.send(random.choice(斥责台词库))
+            return
+
+        # B. 检测作息汇报 (迟睡、熬夜等)
+        包含作息词汇 = any(词 in 奏折内容 for 词 in ["睡", "晚安", "打卡", "熬夜", "才睡", "躺下", "闭眼", "睏"])
         
         if 包含作息词汇:
             if 是否享有豁免(当前时间):
@@ -92,32 +109,29 @@ async def on_message(message):
             elif 当前时辰 < 24:
                 await message.channel.send(f"【大周最高法庭】⚠️ **申饬警示**！大人已近深夜 12 点边缘，作息隐现松懈之兆，内侍省奉劝大人即刻收心安歇，切勿触犯宵禁重律！")
             else:
-                # 深夜 12 点后入寝，触犯天条，强制押入绝对隔离牢房并宣判笞臀
                 法典状态.是否身陷牢狱 = True
                 法典状态.累加惩罚天数 += 1
-                
                 await message.channel.send(
-                    f"【大周最高法庭】🚨 **特大御前宣判：触犯帝国宵禁铁律**！"
-                    f"\n⚖️ **罪名认定**：经内侍省智能查验，大人深夜 12 点后方才入寝，属于明知故犯、扰乱作息大纲！"
-                    f"\n⚡ **刑律宣判**：依大周律例，即刻对大人施以**司法杖责（笞臀惩戒）**，并即时剥夺自由，**强制押送至 <#{禁闭牢房ID}> 【绝对隔离牢房】**严加反省！"
-                    f"\n🔒 **刑期标定**：基础禁闭 1 天并叠加累加惩罚，非至清醒悔悟之日不得释放！"
+                    f"【大周最高法庭】🚨 **御前宣判：触犯帝国宵禁铁律**！"
+                    f"\n⚖️ **罪名认定**：大人深夜 12 点后方才入寝，明知故犯！**还不跪下！**"
+                    f"\n⚡ **刑律宣判**：即刻施以**司法杖责（笞臀惩戒）**，并**强制押送至 <#{禁闭牢房ID}> 【绝对隔离牢房】**严加反省！"
                 )
 
     await 内侍省.process_commands(message)
 
 # ==================== Web 网页保活服务器（满足 Render 要求） ====================
 async def 网页响应处理(request):
-    return web.Response(text="【大周内侍省】Imperial Cloud Bot is operating under strict laws.")
+    return web.Response(text="【大周内侍省】Imperial Cloud Bot is operating with strict royal intelligence.")
 
 async def 启动网页服务():
     app = web.Application()
     app.add_routes([web.get('/', 网页响应处理)])
     runner = web.AppRunner(app)
     await runner.setup()
-    端口号 = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', 端口号)
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"【大周内侍省】Web 保活服务已在端口 {端口号} 启动")
+    print(f"【大周内侍省】Web 保活服务已在端口 {port} 启动")
 
 # ==================== 帝国主程序入口 ====================
 async def 主程序():
