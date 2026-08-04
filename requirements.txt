@@ -1,4 +1,5 @@
-discord.py
-google-genai
-aiohttp
-groq
+discord.py==2.3.2
+google-genai==0.3.0
+aiohttp==3.9.5
+groq==0.4.2
+pydantic==2.7.1
