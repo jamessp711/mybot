@@ -99,11 +99,13 @@ async def on_message(message):
                 档案["关押总时长分钟"] += 分钟
                 刑罚 = AI结果.get("刑罚类型", "笞臀")
                 
+                # 1. 抹杀原罪臣发言
                 try:
                     await message.delete()
                 except:
                     pass
 
+                # 2. 将判决同步至禁闭室
                 try:
                     牢房 = 内侍省.get_channel(禁闭牢房ID)
                     if 牢房:
@@ -111,12 +113,13 @@ async def on_message(message):
                 except:
                     pass
 
-                公告 = await message.channel.send(f"{AI结果.get('response_text')}\n👑 **【判决】** 犯臣 {message.author.mention} 遭 `{刑罚}` 禁闭 {分钟} 分钟！")
-                await asyncio.sleep(8)
-                try:
-                    await 公告.delete()
-                except:
-                    pass
+                # 3. 在大殿中永久留下审判公告（绝不自动删除收回）
+                正式宣判文书 = (
+                    f"{AI结果.get('response_text')}\n\n"
+                    f"👑 **【御前雷霆裁决】** 犯臣 {message.author.mention} 犯下 `{刑罚}`，**判处禁闭思过 {分钟} 分钟**！\n"
+                    f"📋 案卷已归档（累计犯罪 {档案['累犯次数']} 次，总计服刑 {档案['关押总时长分钟']} 分钟）。"
+                )
+                await message.channel.send(正式宣判文书)
                 return
             else:
                 await message.channel.send(AI结果.get("response_text"))
@@ -130,7 +133,6 @@ async def 首页响应(request):
     return web.Response(text="The Supreme Queen's Court is active.")
 
 async def 主程序():
-    # 启动 Web 服务器
     app = web.Application()
     app.router.add_get('/', 首页响应)
     runner = web.AppRunner(app)
@@ -141,7 +143,6 @@ async def 主程序():
     await site.start()
     print(f"【Web服务】已成功绑定端口 {port}")
 
-    # 启动 Discord Bot
     print("【Discord Bot】正在连接服务器...")
     async with 内侍省:
         await 内侍省.start(秘钥令牌)
