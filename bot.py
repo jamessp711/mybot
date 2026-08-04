@@ -16,7 +16,7 @@ print(f"【系统初始化】Token: {'已配置' if 秘钥令牌 else '未配置
 gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 总频道御令ID = 1532548062218813533
-禁闭牢房ID = 1532882699293823016
+禁闭牢房ID = 1532882699293823016  # 务必确保此ID为私密频道的ID
 
 # ==================== 2. Bot 初始化 ====================
 意图 = discord.Intents.default()
@@ -41,20 +41,24 @@ def 获取或初始化档案(用户ID, 用户名):
 async def on_ready():
     print(f"【大周御前】女王陛下已成功上线！Bot: {内侍省.user.name}")
 
-# ==================== 3. 指令与核心事件 ====================
-@内侍省.command(name="罪状")
-async def 呈递罪状档案(ctx):
+# ==================== 3. 刑满释放异步协程 ====================
+async def 执行刑满释放(member, 牢房频道, 分钟数):
+    await asyncio.sleep(分钟数 * 60) # 等待真实的禁闭时间过去
     try:
-        档案 = 获取或初始化档案(ctx.author.id, ctx.author.name)
-        历史记录 = "\n".join([f"- {罪}" for 罪 in 档案["罪状历史"][-5:]]) if 档案["罪状历史"] else "身家清白。"
-        await ctx.send(
-            f"📜 **【大周刑部·档案】**\n"
-            f"👤 犯臣：{ctx.author.display_name} | 累犯：{档案['累犯次数']} 次\n"
-            f"📋 近期罪状：\n{历史记录}"
-        )
+        # 1. 解除系统级禁言 (Timeout)
+        await member.timeout(None, reason="刑满释放，重获自由")
     except Exception as e:
-        print(f"【报错】{e}")
+        print(f"【解除禁言失败】{e}")
 
+    try:
+        # 2. 从私密牢房频道中移除其访问权限
+        if 牢房频道:
+            await 牢房频道.set_permissions(member, overwrite=None)
+            await 牢房频道.send(f"🕊️ **【刑满释放】** 犯臣 {member.mention} 已服刑期满，剥夺牢房权限，遣送回宫！")
+    except Exception as e:
+        print(f"【移除牢房权限失败】{e}")
+
+# ==================== 4. 核心事件与裁决 ====================
 async def 获取Gemini刑部裁决(用户发言: str, 累犯次数: int) -> dict:
     if not gemini_client:
         return {"is_guilty": True, "刑罚类型": "笞臀轻惩", "禁闭分钟数": 10, "response_text": "女王陛下冷哼一声。"}
@@ -107,29 +111,28 @@ async def on_message(message):
 
                 # 2. 真实系统级禁言 (Timeout)
                 try:
-                    # Discord 的 timeout 需要传入一个 timedelta 持续时间
                     解除禁言时间 = datetime.now(timezone.utc) + timedelta(minutes=分钟)
                     await message.author.timeout(解除禁言时间, reason=f"大周刑部判决：{刑罚}")
                 except Exception as e:
-                    print(f"【禁言执行失败，可能Bot权限不足】{e}")
+                    print(f"【禁言执行失败】{e}")
 
-                # 3. 真实频道权限转移（实现隔离牢房效果）
+                # 3. 授予私密隔离牢房权限并押送
                 try:
-                    # 在总频道剥夺其发言权限
-                    await message.channel.set_permissions(message.author, send_messages=False, reason="犯臣禁闭中")
-                    
-                    # 在隔离牢房赋予其查看和发言权限
                     牢房频道 = 内侍省.get_channel(禁闭牢房ID)
                     if 牢房频道:
-                        await 牢房频道.set_permissions(message.author, read_messages=True, send_messages=True, reason="押入隔离牢房思过")
-                        await 牢房频道.send(f"🚨 **【押解入狱】** 犯臣 {message.author.mention} 因犯下 `{刑罚}`，已被押至本牢房禁闭 {分钟} 分钟！(原奏：{message.content})")
+                        # 赋予该犯臣查看和发言权限
+                        await 牢房频道.set_permissions(message.author, read_messages=True, send_messages=True, reason="押入私密隔离牢房")
+                        await 牢房频道.send(f"🚨 **【押解入狱】** 犯臣 {message.author.mention} 犯下 `{刑罚}`，被女王陛下打入私密牢房禁闭 {分钟} 分钟！(原奏：{message.content})")
+                        
+                        # 启动后台计时，刑满后自动释放
+                        内侍省.loop.create_task(执行刑满释放(message.author, 牢房频道, 分钟))
                 except Exception as e:
-                    print(f"【牢房权限调整失败】{e}")
+                    print(f"【私密牢房权限赋予失败】{e}")
 
-                # 4. 在大殿中永久留下审判公告
+                # 4. 在总大殿留下审判公告
                 正式宣判文书 = (
                     f"{AI结果.get('response_text')}\n\n"
-                    f"👑 **【御前雷霆裁决】** 犯臣 {message.author.mention} 犯下 `{刑罚}`，**已剥夺大殿发言权并押入 #絕對隔離牢房 禁闭思过 {分钟} 分钟**！\n"
+                    f"👑 **【御前雷霆裁决】** 犯臣 {message.author.mention} 犯下 `{刑罚}`，**已被剥夺大殿发言权并打入私密 #絕對隔離牢房 禁闭 {分钟} 分钟**！\n"
                     f"📋 案卷已归档（累计犯罪 {档案['累犯次数']} 次，总计服刑 {档案['关押总时长分钟']} 分钟）。"
                 )
                 await message.channel.send(正式宣判文书)
@@ -141,7 +144,7 @@ async def on_message(message):
     except Exception as e:
         print(f"【异常】{e}")
 
-# ==================== 4. 异步 Web 保活服务 ====================
+# ==================== 5. 异步 Web 保活服务 ====================
 async def 首页响应(request):
     return web.Response(text="The Supreme Queen's Court is active.")
 
