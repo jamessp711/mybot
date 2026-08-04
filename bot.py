@@ -5,7 +5,6 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 import random
-from aiohttp import web
 
 # ==================== 1. 配置加载 ====================
 秘钥令牌 = os.environ.get("DISCORD_TOKEN") 
@@ -112,7 +111,7 @@ async def on_message(message):
                 except:
                     pass
 
-                公告 = await message.channel.send(f"{AI結果.get('response_text')}\n👑 **【判决】** 犯臣 {message.author.mention} 遭 `{刑罚}` 禁闭 {分钟} 分钟！")
+                公告 = await message.channel.send(f"{AI结果.get('response_text')}\n👑 **【判决】** 犯臣 {message.author.mention} 遭 `{刑罚}` 禁闭 {分钟} 分钟！")
                 await asyncio.sleep(8)
                 try:
                     await 公告.delete()
@@ -126,26 +125,8 @@ async def on_message(message):
     except Exception as e:
         print(f"【异常】{e}")
 
-# ==================== 4. 极简 Web 保活（确保 Render 端口秒过） ====================
-async def 首页响应(request):
-    return web.Response(text="The Supreme Queen's Court is active.")
-
-async def 启动Web服务():
-    app = web.Application()
-    app.router.add_get('/', 首页响应)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"【Web服务】端口 {port} 已成功绑定保活")
-
-# ==================== 5. 统一异步主入口 ====================
-async def 主程序():
-    # 并发启动 Web 保活与 Discord Bot，彻底解决阻塞与闪退
-    await 启动Web服务()
-    print("【Discord Bot】正在连接服务器...")
-    await 内侍省.start(秘钥令牌)
-
 if __name__ == "__main__":
-    asyncio.run(主程序())
+    if not 秘钥令牌:
+        print("【错误】未找到 DISCORD_TOKEN 环境变量！")
+    else:
+        内侍省.run(秘钥令牌)
