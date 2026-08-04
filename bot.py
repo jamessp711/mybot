@@ -1,12 +1,14 @@
 # ==================== 第一步：检查并安装依赖 ====================
 try:
     import discord
-    from discord.ext import commands, tasks
+    from discord.ext import commands
+    from google import genai
 except ImportError:
     import subprocess
-    subprocess.check_call(["pip", "install", "discord.py"])
+    subprocess.check_call(["pip", "install", "discord.py", "google-genai"])
     import discord
-    from discord.ext import commands, tasks
+    from discord.ext import commands
+    from google import genai
 
 from datetime import datetime, timezone, timedelta
 import asyncio
@@ -16,6 +18,10 @@ from aiohttp import web
 
 # ==================== 宫廷秘钥与频道御令配置 ====================
 秘钥令牌 = os.environ.get("DISCORD_TOKEN") 
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+
+# 初始化 Google Gemini 大模型客户端
+gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 总频道御令ID = 1532548062218813533      # #general 频道
 禁闭牢房ID = 1532882699293823016       # #絕對隔離牢房 频道
@@ -23,6 +29,7 @@ from aiohttp import web
 # ==================== 初始化内侍省 Bot (前缀为 ?) ====================
 意图 = discord.Intents.default()
 意图.message_content = True
+意图.members = True
 内侍省 = commands.Bot(command_prefix="?", intents=意图)
 
 # ==================== 大周律例状态机与核心数据 ====================
@@ -36,12 +43,12 @@ class 大周法典状态:
 
 @内侍省.event
 async def on_ready():
-    print(f"【大周御前】至高无上的女王大人已登基坐殿，内侍省运转正常，恭迎阁下（内阁大人）！")
+    print(f"【大周御前】至高无上的女王陛下已成功接入 Google Gemini 灵智，云端法度全面升级，恭迎内阁大人！")
 
 # ==================== 基础指令 ====================
 @内侍省.command(name="ping")
 async def 臣在御前(ctx):
-    await ctx.send(f"👑 **【大周御前】** 女王陛下圣威浩荡，帝国法度运转如常。心跳延迟：{round(内侍省.latency * 1000)}ms")
+    await ctx.send(f"👑 **【大周御前】** 女王陛下神识清明，Gemini 核心运转正常。心跳延迟：{round(内侍省.latency * 1000)}ms")
 
 # ==================== 核心判定：是否为周末或假期豁免期 ====================
 def 是否享有豁免(当前时间: datetime) -> bool:
@@ -51,7 +58,37 @@ def 是否享有豁免(当前时间: datetime) -> bool:
         return True
     return False
 
-# ==================== 御前奏折处理与女王陛下的冷酷审判 ====================
+# ==================== 调用 Google Gemini 进行智能审判与多领域答疑 ====================
+async def 获取Gemini睿智裁决(用户发言: str, 上下文提示: str) -> str:
+    if not gemini_client:
+        return "【大周内侍省】禀女王陛下：未检测到 GEMINI_API_KEY 密钥，AI 灵智暂未激活。"
+    
+    系统提示词 = (
+        "你现在是大周帝国的至高女王陛下。你高居紫檀御座，冷酷、威严、睿智、专业，精通学术、审判、健康医学与古典文学。"
+        "你的宫廷内阁大臣（使用者）正在筹备将这套系统用于学校纪律和日常管理。"
+        "当大臣或臣子向你上奏、认错、探讨学术、或者倾诉作息/身体健康时："
+        "1. 必须保持高贵、冷酷而又不失人性化关怀的女王口吻。"
+        "2. 如果对方认错或违纪（如熬夜、偷懒），你要进行极其专业、冷酷的审判，明确宣判具体的笞臀板数（如三十大板）、生动的古典触觉描写（如戒尺破空、刑凳、皮肉受惩的刺痛与清醒），并无情宣判打入【绝对隔离牢房】闭门思过。"
+        "3. 如果对方探讨学术、医学或文学，你要展现出渊博、睿智、一针见血的大师级洞察。"
+        "字数请控制在 250 字以内，文风古雅、冷艳而极具威慑力。"
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+        def 调用谷歌大模型():
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"{系统提示词}\n\n【当前情境：{上下文提示}】\n臣子/大臣奏折内容：{用户发言}"
+            )
+            return response.text
+        
+        AI回复 = await loop.run_in_executor(None, 调用谷歌大模型)
+        return AI回复
+    except Exception as e:
+        print(f"【Gemini 调用报错】{e}")
+        return "⚖️ **【大周最高法庭】** 女王陛下沉思片刻，天机紊乱，请大臣稍后重新上奏。"
+
+# ==================== 御前奏折处理与 AI 智能审判核心 ====================
 @内侍省.event
 async def on_message(message):
     if message.author.bot:
@@ -73,67 +110,22 @@ async def on_message(message):
                 await 警告谕旨.delete()
                 return
 
-        # 2. 智能语义洞察：至高女王陛下的冷酷专业审理与古典笞臀触觉重现
+        # 2. 智能化全领域响应 (general 频道内的一切发言，交由 AI 女王陛下审理)
         if 当前频道ID == 总频道御令ID:
             
-            # A. 奏折呈报认错/寻求管教
-            认错词库 = ["犯错", "错了", "负罪", "请罪", "打我", "罚我", "该打", "打怪"]
-            包含认错词汇 = any(词 in 奏折内容 for 词 in 认错词库)
-            
-            if 包含认错词汇:
+            违纪关键词 = ["犯错", "错了", "负罪", "请罪", "打我", "罚我", "该打", "打怪", "熬夜", "睡", "晚安", "睏"]
+            是否包含违纪 = any(词 in 奏折内容 for 词 in 违纪关键词)
+
+            if 是否包含违纪:
                 法典状态.是否身陷牢狱 = True
                 法典状态.累加惩罚天数 += 1
-                
-                # 由高高在上的 Bot 女王大人亲自审理、降下冷酷睿智而兼具触觉的判决
-                女王审判库 = [
-                    (
-                        f"⚖️ **【大周最高法庭·女王御前圣裁】**\n"
-                        f"高居紫檀御座的**女王陛下**居高临下地俯视殿下，声音冷酷而威严：\n"
-                        f"> “既然知罪上奏，那便由孤来亲定刑律！”\n"
-                        f"📜 **圣旨量刑**：依大周铁律，判处**笞臀三十大板**。\n"
-                        f"🖐️ **触觉重现**：冷冽的宫廷戒尺带着破空厉啸狠狠落下，“啪”的一声脆响击中温热的臀肉，火辣辣的刺痛与酥麻由表及里瞬间扩散开来。严苛的痛感将所有的倦怠与侥幸无情击碎，令思绪瞬间恢复极致的清醒。\n"
-                        f"🔒 **执行押解**：即刻革职下狱，由御前侍卫押送至 <#{禁闭牢房ID}> 【绝对隔离牢房】**闭门思过 24 小时**，未经女王宣召不得踏出半步！"
-                    ),
-                    (
-                        f"⚖️ **【大周最高法庭·女王御前圣裁】**\n"
-                        f"御座之上，**女王陛下**神情冷峻，睿智的目光仿佛能洞察一切：\n"
-                        f"> “知错认罚，尚算知趣。但大周律法如山，绝不姑息！”\n"
-                        f"📜 **圣旨量刑**：御笔一挥，判处**笞臀二十五大板**以儆效尤。\n"
-                        f"🖐️ **触觉重现**：檀木刑凳上传来沉闷的击打声与戒尺的冷冽触感，惩戒的力度分毫不差。皮肉受刑带来的清晰痛感顺着脊椎直冲脑海，伴随着温热的泪意，带来一种洗心革面的通透与规训。\n"
-                        f"🔒 **执行押解**：即时锁入 <#{禁闭牢房ID}> 【绝对隔离牢房】执行**全天候隔离反省**，期满方得面圣！"
-                    )
-                ]
-                await message.channel.send(random.choice(女王审判库))
-                return
+                上下文 = "臣子主动认错或作息违规，请求女王降下严厉而兼具古典触觉的笞臀与禁闭惩戒。"
+            else:
+                上下文 = "臣子向女王陛下上奏汇报，涉及学术、文学、医学健康或日常请安，请女王陛下展现睿智、专业与冷酷威严进行批阅。"
 
-            # B. 作息违规查验
-            作息词库 = ["睡", "晚安", "打卡", "熬夜", "才睡", "躺下", "闭眼", "睏"]
-            包含作息词汇 = any(词 in 奏折内容 for 词 in 作息词库)
-            
-            if 包含作息词汇:
-                if 是否享有豁免(当前时间):
-                    await message.channel.send(f"👑 **【大周御前】** 女王陛下准奏：今日乃周末社交豁免期，特许安心休憩，免予作息法度考核。")
-                    return
-
-                当前时辰 = 当前时间.hour
-                当前分钟 = 当前时间.minute
-
-                if 当前时辰 < 21 or (当前时辰 == 21 and 当前分钟 <= 30):
-                    await message.channel.send(f"🌟 **【女王御赐嘉奖】** 阁下今日极早入寝（9:30 PM 前），躬行自律，女王陛下龙颜大悦，特赐御前功名积分大增！")
-                elif 当前时辰 < 22 or (当前时辰 == 22 and 当前分钟 <= 30):
-                    await message.channel.send(f"👍 **【大周内侍奏报】** 阁下于 10:30 PM 前就寝，符合帝国作息常典，内侍省已记入起居注。")
-                elif 当前时辰 < 24:
-                    await message.channel.send(f"⚠️ **【女王御前申饬】** 时近深夜 12 点，作息隐现松懈。女王陛下特此警告：珍重自身，切勿违背养生铁律！")
-                else:
-                    法典状态.是否身陷牢狱 = True
-                    法典状态.累加惩罚天数 += 1
-                    await message.channel.send(
-                        f"🚨 **【大周最高法庭·宵禁重判】**"
-                        f"\n⚖️ **罪名认定**：深夜 12 点后仍未就寝，明知故犯，触犯大周宵禁重律！"
-                        f"\n📜 **女王圣裁**：触怒天颜，判处**笞臀五十大板**。"
-                        f"\n🖐️ **触觉重现**：戒尺接连落下，火辣辣的刺痛与规律的击打狠狠惩戒深夜的懈怠，令人再不敢轻犯！"
-                        f"\n🔒 **强制押送**：即刻打入 <#{禁闭牢房ID}> 【绝对隔离牢房】**执行 48 小时重惩禁闭**！"
-                    )
+            AI裁决结果 = await 获取Gemini睿智裁决(奏折内容, 上下文)
+            await message.channel.send(AI裁决结果)
+            return
         
         await 内侍省.process_commands(message)
 
@@ -142,7 +134,7 @@ async def on_message(message):
 
 # ==================== Web 网页保活服务器 ====================
 async def 网页响应处理(request):
-    return web.Response(text="【大周内侍省】The Queen is reigning with strict and wise imperial laws.")
+    return web.Response(text="【大周内侍省】The Gemini-Powered Queen is reigning with supreme wisdom.")
 
 async def 启动网页服务():
     app = web.Application()
