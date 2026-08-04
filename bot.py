@@ -5,7 +5,6 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 import random
-import threading
 from aiohttp import web
 
 # ==================== 1. 配置加载 ====================
@@ -126,25 +125,29 @@ async def on_message(message):
     except Exception as e:
         print(f"【异常】{e}")
 
-# ==================== 4. Web 端口保活服务（秒过 Render 检查） ====================
+# ==================== 4. 异步 Web 保活服务 ====================
 async def 首页响应(request):
     return web.Response(text="The Supreme Queen's Court is active.")
 
-def 启动Web服务():
+async def 主程序():
+    # 启动 Web 服务器
     app = web.Application()
     app.router.add_get('/', 首页响应)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
     port = int(os.environ.get("PORT", 10000))
-    web.run_app(app, host='0.0.0.0', port=port)
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"【Web服务】已成功绑定端口 {port}")
 
-# ==================== 5. 主程序入口（多线程并行） ====================
+    # 启动 Discord Bot
+    print("【Discord Bot】正在连接服务器...")
+    async with 内侍省:
+        await 内侍省.start(秘钥令牌)
+
 if __name__ == "__main__":
     if not 秘钥令牌:
         print("【错误】未找到 DISCORD_TOKEN 环境变量！")
     else:
-        # 开启独立线程运行 Web 端口保活，主线程留给 Discord Bot
-        web_thread = threading.Thread(target=启动Web服务, daemon=True)
-        web_thread.start()
-        print("【Web服务】已在后台多线程启动保活端口...")
-        
-        print("【Discord Bot】正在连接服务器...")
-        内侍省.run(秘钥令牌)
+        asyncio.run(主程序())
