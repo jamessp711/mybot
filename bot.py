@@ -105,18 +105,31 @@ async def on_message(message):
                 except:
                     pass
 
-                # 2. 将判决同步至禁闭室
+                # 2. 真实系统级禁言 (Timeout)
                 try:
-                    牢房 = 内侍省.get_channel(禁闭牢房ID)
-                    if 牢房:
-                        await 牢房.send(f"🚨 犯臣 {message.author.mention} 犯下 `{刑罚}`，被女王陛下禁闭 {分钟} 分钟！(原奏：{message.content})")
-                except:
-                    pass
+                    # Discord 的 timeout 需要传入一个 timedelta 持续时间
+                    解除禁言时间 = datetime.now(timezone.utc) + timedelta(minutes=分钟)
+                    await message.author.timeout(解除禁言时间, reason=f"大周刑部判决：{刑罚}")
+                except Exception as e:
+                    print(f"【禁言执行失败，可能Bot权限不足】{e}")
 
-                # 3. 在大殿中永久留下审判公告（绝不自动删除收回）
+                # 3. 真实频道权限转移（实现隔离牢房效果）
+                try:
+                    # 在总频道剥夺其发言权限
+                    await message.channel.set_permissions(message.author, send_messages=False, reason="犯臣禁闭中")
+                    
+                    # 在隔离牢房赋予其查看和发言权限
+                    牢房频道 = 内侍省.get_channel(禁闭牢房ID)
+                    if 牢房频道:
+                        await 牢房频道.set_permissions(message.author, read_messages=True, send_messages=True, reason="押入隔离牢房思过")
+                        await 牢房频道.send(f"🚨 **【押解入狱】** 犯臣 {message.author.mention} 因犯下 `{刑罚}`，已被押至本牢房禁闭 {分钟} 分钟！(原奏：{message.content})")
+                except Exception as e:
+                    print(f"【牢房权限调整失败】{e}")
+
+                # 4. 在大殿中永久留下审判公告
                 正式宣判文书 = (
                     f"{AI结果.get('response_text')}\n\n"
-                    f"👑 **【御前雷霆裁决】** 犯臣 {message.author.mention} 犯下 `{刑罚}`，**判处禁闭思过 {分钟} 分钟**！\n"
+                    f"👑 **【御前雷霆裁决】** 犯臣 {message.author.mention} 犯下 `{刑罚}`，**已剥夺大殿发言权并押入 #絕對隔離牢房 禁闭思过 {分钟} 分钟**！\n"
                     f"📋 案卷已归档（累计犯罪 {档案['累犯次数']} 次，总计服刑 {档案['关押总时长分钟']} 分钟）。"
                 )
                 await message.channel.send(正式宣判文书)
