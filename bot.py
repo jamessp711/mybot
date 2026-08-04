@@ -1,19 +1,9 @@
-# ==================== 第一步：检查并安装依赖 ====================
-try:
-    import discord
-    from discord.ext import commands
-    from google import genai
-except ImportError:
-    import subprocess
-    subprocess.check_call(["pip", "install", "discord.py", "google-genai"])
-    import discord
-    from discord.ext import commands
-    from google import genai
-
+import discord
+from discord.ext import commands
+from google import genai
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
-import random
 from aiohttp import web
 
 # ==================== 宫廷秘钥与频道御令配置 ====================
@@ -34,7 +24,6 @@ gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 东八区时区 = timezone(timedelta(hours=8))
 
 # ==================== 大周刑部：臣子犯罪档案数据库 ====================
-# 用于记录每位臣子的：{ 用户ID: {"名字": str, "累犯次数": int, "关押总时长分钟": int, "罪状历史": list} }
 大周刑部档案库 = {}
 
 def 获取或初始化档案(用户ID, 用户名):
@@ -85,7 +74,6 @@ async def 获取Gemini睿智裁决(用户发言: str, 上下文提示: str) -> s
     
     系统提示词 = (
         "你现在是大周帝国的至高女王陛下。你高居紫檀御座，冷酷、威严、睿智、专业。"
-        "你的宫廷内阁大臣（使用者）正在筹备将这套系统用于学校纪律管理。"
         "当臣子向你上奏、认错或违纪时，必须保持冷酷、威严的女王口吻，降下精准的笞臀惩戒与古典触觉描写。"
         "字数请严格控制在 200 字以内。"
     )
@@ -132,22 +120,19 @@ async def on_message(message):
         # 2. 智能化全领域响应
         if 当前频道ID == 总频道御令ID:
             
-            违纪关键词 = ["犯错", "错了", "负罪", "请罪", "打我", "罚我", "该打", "打怪", "熬夜", "睡", "晚安", "睏"]
+            违纪关键词 = ["犯错", "错了", "负罪", "请罪", "打我", "罚我", "該打", "打怪", "熬夜", "睡", "晚安", "睏"]
             是否包含违纪 = any(词 in 奏折内容 for 词 in 违纪关键词)
 
             if 是否包含违纪:
-                # 建立或更新档案
                 档案 = 获取或初始化档案(用户ID, 用户名)
                 档案["累犯次数"] += 1
                 
-                # 依据累犯次数智能判断：若累犯次数多，直接执行“无预警重罪直接关押 60 分钟以上”不经审讯！
                 if 档案["累犯次数"] >= 3 or "熬夜" in 奏折内容:
-                    关押时长 = 60 * 档案["累犯次数"]  # 累犯越重，关押越久
+                    关押时长 = 60 * 档案["累犯次数"]
                     档案["关押总时长分钟"] += 关押时长
                     罪状描述 = f"于 {当前时间.strftime('%m-%d %H:%M')} 触犯重律（累犯第{档案['累犯次数']}次）"
                     档案["罪状历史"].append(罪状描述)
 
-                    # 👑 核心绝招：不经审讯，直接无预警强行踢入绝对隔离牢房！
                     await message.channel.send(
                         f"🚨 **【大周刑部·无预警铁律重审】**\n"
                         f"⚡ 察觉罪孽深重、累犯多端！御座之上的**女王陛下**甚至无需听其辩解，凤目一寒，直接下达雷霆法旨：\n"
@@ -156,17 +141,15 @@ async def on_message(message):
                     )
                     return
 
-                # 若情节尚可，则走正常的 AI 审判流程，并在审判结束后出示罪状
                 上下文 = "臣子主动认错或违规，请女王陛下进行冷酷而威严的当庭审判，并降下笞臀惩戒。"
                 AI裁决结果 = await 获取Gemini睿智裁决(奏折内容, 上下文)
                 
-                # 案册登记
                 档案["关押总时长分钟"] += 30
                 档案["罪状历史"].append(f"于 {当前时间.strftime('%m-%d %H:%M')} 当庭受审：{奏折内容[:20]}")
                 
                 正式罪状宣判 = (
                     f"{AI裁决结果}\n\n"
-                    f"📋 **【刑部案结呈报】** 罪状已归档。犯臣目前累计犯罪 {档案['累犯次数']} 次，总计服刑 {档案['关押总时长分钟']} 分钟。输入 `?罪状` 可随时查阅完整卷宗。"
+                    f"📋 **【刑部案结呈报】** 罪状已归档。犯臣目前累计犯罪 {档案['累犯次数']} 次，总计服刑 {档案['关押总时长分钟']} 分钟. 输入 `?罪状` 可随时查阅完整卷宗。"
                 )
                 
                 if len(正式罪状宣判) > 2000:
@@ -187,7 +170,7 @@ async def on_message(message):
 
 # ==================== Web 网页保活服务器 ====================
 async def 网页响应处理(request):
-    return web.Response(text="【大周内侍省】The Supreme Queen's Court is active.")
+    return web.Response(text="The Supreme Queen's Court is active.")
 
 async def 启动网页服务():
     app = web.Application()
@@ -197,7 +180,7 @@ async def 启动网页服务():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"【大周内侍省】Web 保活服务已在端口 {port} 启动")
+    print(f"Web保活服务已启动")
 
 async def 主程序():
     await 启动网页服务()
