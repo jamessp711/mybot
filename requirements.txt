@@ -1,2 +1,4 @@
-
 discord.py
+google-genai
+aiohttp
+groq
