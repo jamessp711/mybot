@@ -10,6 +10,8 @@ from aiohttp import web
 秘钥令牌 = os.environ.get("DISCORD_TOKEN") 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
+print(f"【系统初始化】正在加载配置... Token 状态: {'已配置' if 秘钥令牌 else '未配置！'}, Gemini Key 状态: {'已配置' if GEMINI_KEY else '未配置！'}")
+
 gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 总频道御令ID = 1532548062218813533      # #general 频道
@@ -38,22 +40,25 @@ def 获取或初始化档案(用户ID, 用户名):
 
 @内侍省.event
 async def on_ready():
-    print(f"【大周御前】刑部大案牍司运转正常，女王陛下执掌无情铁律，恭迎内阁大人！")
+    print(f"【大周御前】女王陛下已成功上线！Bot 账号名称: {内侍省.user.name} (ID: {内侍省.user.id})")
 
-# ==================== 基础指令：查阅起居注与个人罪状档案 ====================
+# ==================== 基础指令 ====================
 @内侍省.command(name="罪状")
 async def 呈递罪状档案(ctx):
-    档案 = 获取或初始化档案(ctx.author.id, ctx.author.name)
-    历史记录文本 = "\n".join([f"- {罪}" for 罪 in 档案["罪状历史"][-5:]]) if 档案["罪状历史"] else "暂无重大案底，身家清白。"
-    
-    await ctx.send(
-        f"📜 **【大周刑部·御前起居注档案】**\n"
-        f"👤 **犯臣/臣子**：{ctx.author.display_name}\n"
-        f"⚖️ **累犯次数**：{档案['累犯次数']} 次\n"
-        f"🔒 **判决关押总计**：{档案['关押总时长分钟']} 分钟\n"
-        f"📋 **近期罪状摘要**：\n{历史记录文本}\n"
-        f"*(女王陛下目光如炬，一切因果皆有定数。)*"
-    )
+    try:
+        档案 = 获取或初始化档案(ctx.author.id, ctx.author.name)
+        历史记录文本 = "\n".join([f"- {罪}" for 罪 in 档案["罪状历史"][-5:]]) if 档案["罪状历史"] else "暂无重大案底，身家清白。"
+        
+        await ctx.send(
+            f"📜 **【大周刑部·御前起居注档案】**\n"
+            f"👤 **犯臣/臣子**：{ctx.author.display_name}\n"
+            f"⚖️ **累犯次数**：{档案['累犯次数']} 次\n"
+            f"🔒 **判决关押总计**：{档案['关押总时长分钟']} 分钟\n"
+            f"📋 **近期罪状摘要**：\n{历史记录文本}\n"
+            f"*(女王陛下目光如炬，一切因果皆有定数。)*"
+        )
+    except Exception as e:
+        print(f"【指令报错】?罪状 执行异常: {e}")
 
 @内侍省.command(name="ping")
 async def 臣在御前(ctx):
@@ -93,7 +98,7 @@ async def 获取Gemini睿智裁决(用户发言: str, 上下文提示: str) -> s
         print(f"【Gemini 调用报错】{e}")
         return "⚖️ **【大周最高法庭】** 女王陛下沉思片刻，天机紊乱。"
 
-# ==================== 御前奏折处理与无预警重罚核心 ====================
+# ==================== 御前奏折处理核心 ====================
 @内侍省.event
 async def on_message(message):
     if message.author.bot:
@@ -149,7 +154,7 @@ async def on_message(message):
                 
                 正式罪状宣判 = (
                     f"{AI裁决结果}\n\n"
-                    f"📋 **【刑部案结呈报】** 罪状已归档。犯臣目前累计犯罪 {档案['累犯次数']} 次，总计服刑 {档案['关押总时长分钟']} 分钟. 输入 `?罪状` 可随时查阅完整卷宗。"
+                    f"📋 **【刑部案结呈报】** 罪状已归档。犯臣目前累计犯罪 {档案['累犯次数']} 次，总计服刑 {档案['关押总时长分钟']} 分钟。输入 `?罪状` 可随时查阅完整卷宗。"
                 )
                 
                 if len(正式罪状宣判) > 2000:
@@ -158,7 +163,7 @@ async def on_message(message):
                 await message.channel.send(正式罪状宣判)
                 return
             else:
-                上下文 = "臣子正常上奏汇报，涉及学术、文学、医学或日常请安，请女王展现睿智与专业进行批阅。"
+                上下文 = "臣子正常上奏汇报，涉及学术, 文学, 医学或日常请安, 请女王展现睿智与专业进行批阅。"
                 AI裁决结果 = await 获取Gemini睿智裁决(奏折内容, 上下文)
                 await message.channel.send(AI裁决结果)
                 return
@@ -166,7 +171,7 @@ async def on_message(message):
         await 内侍省.process_commands(message)
 
     except Exception as e:
-        print(f"【内侍省防闪退捕获日志】发生异常: {e}")
+        print(f"【on_message 发生严重异常】: {e}")
 
 # ==================== Web 网页保活服务器 ====================
 async def 网页响应处理(request):
@@ -180,10 +185,11 @@ async def 启动网页服务():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"Web保活服务已启动")
+    print(f"【Web服务】保活服务已在端口 {port} 启动")
 
 async def 主程序():
     await 启动网页服务()
+    print("【Discord Bot】正在尝试连接 Discord 服务器...")
     await 内侍省.start(秘钥令牌)
 
 if __name__ == "__main__":
