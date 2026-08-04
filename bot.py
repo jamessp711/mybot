@@ -5,6 +5,8 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 import random
+import threading
+from aiohttp import web
 
 # ==================== 1. 配置加载 ====================
 秘钥令牌 = os.environ.get("DISCORD_TOKEN") 
@@ -88,7 +90,6 @@ async def on_message(message):
     if message.author.bot:
         return
     try:
-        当前时间 = datetime.now(东八区时区)
         if message.channel.id == 总频道御令ID:
             档案 = 获取或初始化档案(message.author.id, message.author.name)
             AI结果 = await 获取Gemini刑部裁决(message.content, 档案["累犯次数"])
@@ -125,8 +126,25 @@ async def on_message(message):
     except Exception as e:
         print(f"【异常】{e}")
 
+# ==================== 4. Web 端口保活服务（秒过 Render 检查） ====================
+async def 首页响应(request):
+    return web.Response(text="The Supreme Queen's Court is active.")
+
+def 启动Web服务():
+    app = web.Application()
+    app.router.add_get('/', 首页响应)
+    port = int(os.environ.get("PORT", 10000))
+    web.run_app(app, host='0.0.0.0', port=port)
+
+# ==================== 5. 主程序入口（多线程并行） ====================
 if __name__ == "__main__":
     if not 秘钥令牌:
         print("【错误】未找到 DISCORD_TOKEN 环境变量！")
     else:
+        # 开启独立线程运行 Web 端口保活，主线程留给 Discord Bot
+        web_thread = threading.Thread(target=启动Web服务, daemon=True)
+        web_thread.start()
+        print("【Web服务】已在后台多线程启动保活端口...")
+        
+        print("【Discord Bot】正在连接服务器...")
         内侍省.run(秘钥令牌)
