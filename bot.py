@@ -10,11 +10,13 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==========================================
-# 【大周新政：凡走过必留痕与案卷审讯核心模块】
+# 【大周新政：黑牢刑期传承、身份证打卡与行踪案卷模块】
 # ==========================================
 
-ACTIVE_BLACK_PRISON_SESSIONS = {}
-OFFICIAL_ARCHIVES = []  # 记录大周所有的行踪、打卡与判决案卷
+# 1. 核心持久化存储：保留所有黑牢在押犯人的真实Session、刑期与大殿案卷
+ACTIVE_BLACK_PRISON_SESSIONS = globals().get("ACTIVE_BLACK_PRISON_SESSIONS", {})
+OFFICIAL_ARCHIVES = globals().get("OFFICIAL_ARCHIVES", [])  # 案卷库：凡走过必留痕
+WEEKLY_MISSING_CHECKIN = globals().get("WEEKLY_MISSING_CHECKIN", {})
 
 def is_grand_court_open():
     """仅限早晨 06:00 - 08:00 营业审判"""
@@ -38,12 +40,12 @@ async def check_curfew_online_violation():
 @commands.has_permissions(administrator=True)
 async def add_fast_prison(ctx, member: discord.Member, minutes: int, *, reason: str):
     ACTIVE_BLACK_PRISON_SESSIONS[member.id] = {
-        "reason": f"【特快直通】{reason}",
+        "reason": f"【国家登记法令】{reason}",
         "total_lashes": 30,
         "prison_days": 0,
         "online_violation_count": 0
     }
-    log_text = f"⚡ 【黑牢直通车】犯人 {member.mention} 直接执行特快黑牢 {minutes} 分钟！罪因：{reason}"
+    log_text = f"⚡ 【黑牢判决】犯人 {member.mention} 违反国家登记法令（未带身份证等），直接收监 {minutes} 分钟！罪因：{reason}"
     OFFICIAL_ARCHIVES.append(log_text)
     await ctx.send(log_text)
 
@@ -57,32 +59,32 @@ async def add_morning_trial(ctx, member: discord.Member, honest: bool):
     if member.id in ACTIVE_BLACK_PRISON_SESSIONS:
         session = ACTIVE_BLACK_PRISON_SESSIONS[member.id]
         if honest:
-            msg = f"⚖️ 【黎明终审】犯人 {member.mention} 态度诚实，本期服刑完毕！"
+            msg = f"⚖️ 【黎明终审】犯人 {member.mention} 经审讯态度诚实，本期服刑完毕，开释！"
             del ACTIVE_BLACK_PRISON_SESSIONS[member.id]
         else:
-            session["total_lashes"] += 50
-            msg = f"🚨 【雷霆大怒】犯人 {member.mention} 竟敢在朝审中撒谎！追加 50 大板！"
+            session["total_lashes"] += 20
+            msg = f"🚨 【雷霆大怒】犯人 {member.mention} 竟敢在朝审中隐瞒行踪！数罪并罚，追加 20 大板！"
         OFFICIAL_ARCHIVES.append(msg)
         await ctx.send(msg)
     else:
-        await ctx.send(f"【大周律法】查无此人，该犯人今日安分守己。")
+        await ctx.send(f"【大周律法】查无此人，该犯人今日身份证打卡合规，无需受审。")
 
 @bot.command(name="court_records")
 async def show_court_records(ctx):
-    """查看大周行踪与审讯案卷"""
+    """查看大周行踪与案卷审讯库"""
     if not OFFICIAL_ARCHIVES:
-        await ctx.send("📜 【大周案卷库】目前档案柜空空如也。")
+        await ctx.send("📜 【大周案卷库】目前档案柜空空如也，国民行踪一切正常。")
         return
     records_summary = "\n".join(OFFICIAL_ARCHIVES[-10:])
-    await ctx.send(f"📜 **【大周公正案卷存档】**\n{records_summary}")
+    await ctx.send(f"📜 **【大周国民行踪与审讯案卷存档】**\n{records_summary}")
 
 
 # ==========================================
-# 【事件监听与行踪留痕区】
+# 【核心事件监听与身份证打卡系统】
 # ==========================================
 @bot.event
 async def on_ready():
-    print(f"大周禁军统帅 {bot.user} 已经正式登基上线！")
+    print(f"大周禁军统帅 {bot.user} 已经正式登基上线！当前黑牢在押犯人数：{len(ACTIVE_BLACK_PRISON_SESSIONS)}")
 
 @bot.event
 async def on_message(message):
@@ -91,19 +93,26 @@ async def on_message(message):
 
     content = message.content
     now_str = datetime.now().strftime("%H:%M")
-    
-    # 凡走过必留痕：将一切发言记录在案，供女王日后审讯调阅
-    track_log = f"【行踪留痕】[{now_str}] 犯人 {message.author.name} 出现在频道，言：{content}"
+    user_id = message.author.id
+
+    # 1. 凡走过必留痕：记录一切行踪，作为女王日后审讯的硬核 Data
+    track_log = f"【行踪侦查】[{now_str}] 国民 {message.author.name} 出现在大周，言：{content}"
     OFFICIAL_ARCHIVES.append(track_log)
 
-    # 响应：早安、打卡
+    # 2. 身份证打卡判定
     if "早安" in content or "打卡" in content:
-        reply_msg = f"⚖️ 【大周女王】哼！犯人 {message.author.mention} 已打卡（留痕时间 {now_str}）。作息若敢不稳，仔细你的皮！"
+        if user_id in WEEKLY_MISSING_CHECKIN:
+            WEEKLY_MISSING_CHECKIN[user_id] = max(0, WEEKLY_MISSING_CHECKIN[user_id] - 1)
+            
+        reply_msg = (
+            f"⚖️ 【大周女王】国民 {message.author.mention} 成功出示身份证打卡（留痕时间 {now_str}）。"
+            f"行踪已录入案卷，今日准予通行！"
+        )
         await message.channel.send(reply_msg)
 
-    # 响应：早睡早起、试跑计划
+    # 3. 早睡早起试跑计划支持
     elif "早睡" in content or "早起" in content or "试跑" in content:
-        reply_msg = f"🏃‍♀️ 【大周女王】好个「早睡早起试跑计划」！犯人 {message.author.mention} 既有此志，本宫准奏！"
+        reply_msg = f"🏃‍♀️ 【大周女王】好个「早睡早起试跑计划」！国民 {message.author.mention} 既有此觉悟，本宫准奏记档！"
         await message.channel.send(reply_msg)
 
     await bot.process_commands(message)
