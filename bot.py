@@ -76,6 +76,20 @@ async def add_morning_trial(ctx, member: discord.Member, honest: bool):
 async def on_ready():
     print(f"大周禁军统帅 {bot.user} 已经正式登基上线！")
 
+@bot.event
+async def on_message(message):
+    # 防止机器人自己和自己对话陷入死循环
+    if message.author.bot:
+        return
+
+    # 自动识别“早安”或“打卡”并给予宫廷回应
+    content = message.content
+    if "早安" in content or "打卡" in content:
+        await message.channel.send(f"⚖️ 【大周朝廷】叩见内阁大人！微臣已记下大人今日之早安打卡，勤勉可嘉！")
+
+    # 必须保留这句，否则感叹号开头的指令（如 !morning_trial）会失效
+    await bot.process_commands(message)
+
 
 # ==========================================
 # 异步 Web 保活服务与主程序启动区
