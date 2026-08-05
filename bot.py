@@ -82,12 +82,12 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # 自动识别“早安”或“打卡”并给予宫廷回应
+    # 自动识别“早安”或“打卡”，由女王陛下展现威严与恩准
     content = message.content
     if "早安" in content or "打卡" in content:
-        await message.channel.send(f"⚖️ 【大周朝廷】叩见内阁大人！微臣已记下大人今日之早安打卡，勤勉可嘉！")
+        await message.channel.send(f"⚖️ 【大周女王】准奏！本宫已记下内阁大人今日之早安打卡，勤勉可嘉，赏！")
 
-    # 必须保留这句，否则感叹号开头的指令（如 !morning_trial）会失效
+    # 必须保留这句，否则感叹号开头的指令会失效
     await bot.process_commands(message)
 
 
