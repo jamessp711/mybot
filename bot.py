@@ -53,7 +53,7 @@ async def add_fast_prison(ctx, member: discord.Member, minutes: int, *, reason: 
 @commands.has_permissions(administrator=True)
 async def add_morning_trial(ctx, member: discord.Member, honest: bool):
     if not is_grand_court_open():
-        await ctx.send("【大周律法】启禀大人，当前非朝廷营业与审判时间（06:00-08:00），不得升堂！")
+        await ctx.send("【大周律法】启禀陛下，当前非朝廷营业与审判时间（06:00-08:00），不得升堂！")
         return
         
     if member.id in ACTIVE_BLACK_PRISON_SESSIONS:
@@ -66,11 +66,11 @@ async def add_morning_trial(ctx, member: discord.Member, honest: bool):
             session["prison_days"] += 3
             await ctx.send(f"🚨 【雷霆大怒】犯人 {member.mention} 竟敢在黑牢朝审中撒谎！当场加判 3 天黑牢、追加 50 大板！")
     else:
-        await ctx.send(f"【大周律法】查无此人，该国民昨夜安分守己，无需受审。")
+        await ctx.send(f"【大周律法】查无此人，该犯人今日安分守己，无需受审。")
 
 
 # ==========================================
-# 【大人原有的核心逻辑与事件监听区】
+# 【核心逻辑与事件监听区】
 # ==========================================
 @bot.event
 async def on_ready():
@@ -82,10 +82,10 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # 自动识别“早安”或“打卡”，由女王陛下展现威严与恩准
+    # 自动识别“早安”或“打卡”，严格按犯人身份进行回应
     content = message.content
     if "早安" in content or "打卡" in content:
-        await message.channel.send(f"⚖️ 【大周女王】准奏！本宫已记下内阁大人今日之早安打卡，勤勉可嘉，赏！")
+        await message.channel.send(f"⚖️ 【大周女王】哼！犯人 {message.author.mention} 迟了打卡还敢面见本宫？念你尚有悔意，暂且记下，今日表现给本宫放机灵点！")
 
     # 必须保留这句，否则感叹号开头的指令会失效
     await bot.process_commands(message)
