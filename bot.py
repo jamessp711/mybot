@@ -2,7 +2,7 @@ import http.server
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import discord
 from discord.ext import commands, tasks
 from google import genai
@@ -47,7 +47,6 @@ ISOLATION_ROOM_NAME = "絕對隔離牢房"  # 国法长期坐牢与沉淀档案�
 PUNISHMENT_LOG_NAME = "punishment-room"  # 全面惩罚与行为不检数据记录台
 
 # ----------------- 长期坐牢状态字典（国法国策） -----------------
-# 格式: { user_id: {"days_left": 剩余监禁天数, "crime": 罪名, "category": "国法"} }
 PRISON_RECORDS = {}
 
 
@@ -112,7 +111,6 @@ async def grand_prison_judgment_loop():
         if not member:
           continue
 
-        # 经历了一个完整夜间监禁周期（22:00-06:00），扣减 1 个监禁日
         record["days_left"] -= 1
 
         if record["days_left"] <= 0:
@@ -152,7 +150,6 @@ async def grand_prison_judgment_loop():
           embed=embed,
       )
 
-  # 【晚上 22:00 (10pm) —— 开启新一轮监禁周期计算】
   elif current_hour == 22 and current_minute == 0:
     for guild in bot.guilds:
       isolation_channel = discord.utils.get(
@@ -195,7 +192,6 @@ async def on_message(message):
       guild.text_channels, name=PUNISHMENT_LOG_NAME
   )
 
-  # 【绝对隔离牢房防线】：若有人在国法黑牢内违规发言，直接拦截并删除（全盘禁言）
   if isolation_channel and message.channel.id == isolation_channel.id:
     try:
       await message.delete()
@@ -209,17 +205,28 @@ async def on_message(message):
     await warning_msg.delete(delay=4)
     return
 
-  # ==================== 正常日常频道的审判流 ====================
   ruling = await analyze_and_judge_crime(message.content)
 
   law_type = ruling.get("law_type", "家法")
   crime_name = ruling.get("crime_name", "日常行为不检")
   sentence = ruling.get("sentence", "准奏，退下。")
 
-  # ==================== 选项 A：家法裁决（短时禁言，不入长期坐牢档案） ====================
+  # ==================== 选项 A：家法裁决（短时禁言 + Discord 官方 Timeout） ====================
   if law_type == "家法":
     duration_mins = int(ruling.get("duration_minutes", 15))
     punishment_desc = f"触犯家法，原地短时禁言 {duration_mins} 分钟"
+
+    # 【关键修复】：直接调用 Discord 官方禁言（Timeout）功能
+    try:
+      timeout_duration = timedelta(minutes=duration_mins)
+      await message.author.timeout(
+          timeout_duration, reason=f"家法惩戒: {crime_name}"
+      )
+      print(f"成功对 {message.author} 实施了 {duration_mins} 分钟的官方禁言。")
+    except Exception as ex:
+      print(
+          f"执行官方禁言失败（可能 Bot 权限不足或对方是管理员）: {ex}"
+      )
 
     # 1. 频道公开宣判
     embed = discord.Embed(
@@ -228,19 +235,19 @@ async def on_message(message):
             f"**受罚罪奴**：{message.author.mention}\n**案发频道**："
             f"`#{message.channel.name}`\n**不检行为**：`{message.content}`\n\n-----------------------------------\n"
             f"📜 **律法性质**：`家法（短时惩戒）`\n🔍 **行为定性**：`{crime_name}`\n🏛️"
-            f" **女王圣裁**：\n> *{sentence}*\n\n⏳ **家法执行**：`{punishment_desc}`"
+            f" **女王圣裁**：\n> *{sentence}*\n\n⏳ **家法执行**：`{punishment_desc}（已启动服务器禁言）`"
         ),
-        color=0xD4AF37,  # 金色/家法色
+        color=0xD4AF37,
     )
     await message.channel.send(
-        content=f"⚠️ 家法降临！罪奴 {message.author.mention} 言行不检，女王当庭训诫：",
+        content=f"⚠️ 家法降临！罪奴 {message.author.mention} 言行不检，女王当庭训诫并施以禁言：",
         embed=embed,
     )
 
-    # 2. 核心：将家法惩罚与行为不检详细记录至 punishment-room 数据台
+    # 2. 记录至 punishment-room 数据台
     if log_channel:
       log_embed = discord.Embed(
-          title="📁 【Punishment Room - 家法惩罚及行为不检记录】",
+          title="📁 [Punishment Room - 家法惩罚及行为不检记录]",
           description=(
               f"**受罚人**：{message.author.mention} (ID: `{message.author.id}`)\n"
               f"**案发地点**：`#{message.channel.name}`\n"
@@ -248,7 +255,7 @@ async def on_message(message):
               f"📜 **律法依据**：`家法`\n"
               f"🔍 **罪名**：`{crime_name}`\n"
               f"🏛️ **判词**：`{sentence}`\n"
-              f"⏳ **处理结果**：`短时禁言 {duration_mins} 分钟`"
+              f"⏳ **处理结果**：`短时禁言 {duration_mins} 分钟（已执行）`"
           ),
           color=0xB8860B,
       )
@@ -257,15 +264,14 @@ async def on_message(message):
       )
       await log_channel.send(embed=log_embed)
 
-  # ==================== 5. 选项 B：国法裁决（重罪：押入黑牢，以夜10到晨6算完整监禁周期） ====================
+  # ==================== 选项 B：国法裁决（重罪：押入黑牢） ====================
   else:
-    assigned_days = 1  # 默认判处 1 个完整的夜间监禁周期
+    assigned_days = 1
     punishment_desc = (
         "触犯国法，全服禁言，押入绝对隔离牢房，执行 1 个监禁周期"
         "（22:00-次日08:00）"
     )
 
-    # 1. 频道公开宣判
     embed = discord.Embed(
         title="⚖️ 【女王御前国法庭】重罪判决书",
         description=(
@@ -274,14 +280,13 @@ async def on_message(message):
             f"📜 **律法性质**：`国法（重罪坐牢）`\n🔍 **查明罪名**：`{crime_name}`\n🏛️"
             f" **女王圣裁**：\n> *{sentence}*\n\n⛓️ **刑罚执行**：`{punishment_desc}`"
         ),
-        color=0x8B0000,  # 肃杀红
+        color=0x8B0000,
     )
     await message.channel.send(
         content=f"⚡ 国法不容情！罪奴 {message.author.mention} 严重违纪，押入黑牢：",
         embed=embed,
     )
 
-    # 2. 执行牢房禁言权限并累加长期坐牢档案
     if isolation_channel:
       try:
         await isolation_channel.set_permissions(
@@ -301,9 +306,8 @@ async def on_message(message):
 
       total_days = PRISON_RECORDS[message.author.id]["days_left"]
 
-      # 同步向隔离牢房和 punishment-room 数据台推送沉淀档案
       archive_embed = discord.Embed(
-          title="📁 【Punishment Room - 国法重罪收监档案】",
+          title="📁 [Punishment Room - 国法重罪收监档案]",
           description=(
               f"**服刑重犯**：{message.author.mention} (ID: `{message.author.id}`)\n"
               f"**案发地点**：`#{message.channel.name}`\n"
@@ -320,7 +324,6 @@ async def on_message(message):
           text=f"入狱归档时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
       )
 
-      # 投递到国法黑牢
       await isolation_channel.send(
           content=(
               f"📥 【黑牢收监】重犯 {message.author.mention}"
@@ -329,14 +332,13 @@ async def on_message(message):
           embed=archive_embed,
       )
 
-      # 同步抄送一份到统一的 punishment-room 数据沉淀中心
       if log_channel and log_channel.id != isolation_channel.id:
         await log_channel.send(embed=archive_embed)
 
   await bot.process_commands(message)
 
 
-# ==================== 6. 启动程序 ====================
+# ==================== 5. 启动程序 ====================
 if __name__ == "__main__":
   if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
