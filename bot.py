@@ -1,12 +1,42 @@
+import http.server
 import os
 import random
+import threading
 import discord
 from discord.ext import commands
 from google import genai
 
+# ==================== 0. 应对 Render 免费端口要求的轻量 Web 服务 ====================
+# Render 会要求 Web Service 监听一个端口（通常由环境变量 PORT 提供，默认 10000）
+PORT = int(os.environ.get("PORT", 10000))
+
+
+class DummyHandler(http.server.BaseHTTPRequestHandler):
+
+  def do_GET(self):
+    self.send_response(200)
+    self.end_headers()
+    self.wfile.write(b"Bot is alive and running!")
+
+  def log_message(self, format, *args):
+    # 屏蔽不必要的 HTTP 访问日志，保持日志清爽
+    pass
+
+
+def run_web_server():
+  server_address = ("", PORT)
+  httpd = http.server.HTTPServer(server_address, DummyHandler)
+  print(f"【HTTP 守卫】已在端口 {PORT} 启动，专供 Render 扫描。")
+  httpd.serve_forever()
+
+
+# 启动一个独立线程运行 HTTP 服务，不影响 Discord Bot 的主循环
+web_thread = threading.Thread(target=run_web_server, daemon=True)
+web_thread.start()
+
+
 # ==================== 1. 初始化各项配置 ====================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-# 初始化 Google GenAI 客户端（使用环境变量中的 GEMINI_API_KEY）
 gemini_client = genai.Client()
 
 intents = discord.Intents.default()
@@ -21,10 +51,6 @@ PUNISHMENT_ROOM_NAME = "punishment-room"
 
 # ==================== 2. 后台 Gemini 智能审判核心函数（女王大人视角） ====================
 async def analyze_and_judge_crime(user_message: str) -> dict:
-  """由后台 Gemini AI 驱动，以女王大人的绝对权威审视罪奴的奏疏，
-
-  自动辨别【国法】或【家法】并随机调度刑罚。
-  """
   prompt = f"""
     你现在是至高无上、执掌无情家法与国法的「女王大人」。
     下方是你的卑微男奴/罪人呈上的一段奏疏/汇报：
@@ -76,17 +102,14 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-  # 避免 Bot 自己触发自己的消息
   if message.author.bot:
     return
 
-  # 锁定 punishment-room 频道
   punishment_channel = discord.utils.get(
       message.guild.text_channels, name=PUNISHMENT_ROOM_NAME
   )
   target_channel = punishment_channel if punishment_channel else message.channel
 
-  # 监听罪奴的奏疏关键词
   trigger_keywords = [
       "报告",
       "迟到",
@@ -101,7 +124,6 @@ async def on_message(message):
       "作息",
   ]
   if any(kw in message.content for kw in trigger_keywords):
-    # 后台交由 Gemini 审判
     ruling = await analyze_and_judge_crime(message.content)
 
     category = ruling.get("category", "国法")
@@ -109,7 +131,6 @@ async def on_message(message):
     sentence = ruling.get("sentence", "革职查办")
     punishment = ruling.get("punishment", "杖责三十大板")
 
-    # 构建女王大人专属的审判 Embed 罪状书
     embed = discord.Embed(
         title=f"⚖️ 【女王御前审判庭】-{category}判罪书",
         description=(
@@ -118,13 +139,12 @@ async def on_message(message):
             f"📜 **律法分类**：`{category}`\n🔍 **查明罪名**：`{crime_name}`\n🏛️"
             f" **女王圣裁**：\n> *{sentence}*\n\n⛓️ **执行刑罚**：`{punishment}`"
         ),
-        color=0x8B0000,  # 肃杀的深红
+        color=0x8B0000,
     )
     embed.set_footer(
         text="大周内侍省・無光墨牢 —— 罚单已下达，案卷永久存档。"
     )
 
-    # 女王大人亲自降罪宣判
     await target_channel.send(
         content=(
             f"⚡ 听候法旨！罪奴 {message.author.mention}"
