@@ -1,172 +1,144 @@
 import os
-import asyncio
-from datetime import datetime, time
+import random
 import discord
-from discord.ext import commands, tasks
-from aiohttp import web
+from discord.ext import commands
+from google import genai
 
-intents = discord.Intents.all()
+# ==================== 1. 初始化各项配置 ====================
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+# 初始化 Google GenAI 客户端（使用环境变量中的 GEMINI_API_KEY）
+gemini_client = genai.Client()
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ==========================================
-# 【大周赛博刑部：双轨制案卷与黑牢托管系统】
-# ==========================================
-ACTIVE_BLACK_PRISON_SESSIONS = globals().get("ACTIVE_BLACK_PRISON_SESSIONS", {})
-OFFICIAL_ARCHIVES = globals().get("OFFICIAL_ARCHIVES", [])  # 全局历史档案
-USER_CRIME_RECORDS = globals().get("USER_CRIME_RECORDS", {})  # 个人专属判罪档案库
-
+# 专属惩戒大殿频道名称
 PUNISHMENT_ROOM_NAME = "punishment-room"
 
-def is_grand_court_open():
-    now_time = datetime.now().time()
-    return time(6, 0) <= now_time <= time(8, 0)
 
-def is_black_prison_time():
-    now_time = datetime.now().time()
-    return now_time >= time(22, 0) or now_time < time(6, 0)
+# ==================== 2. 后台 Gemini 智能审判核心函数（女王大人视角） ====================
+async def analyze_and_judge_crime(user_message: str) -> dict:
+  """由后台 Gemini AI 驱动，以女王大人的绝对权威审视罪奴的奏疏，
 
-@tasks.loop(minutes=5)
-async def check_curfew_online_violation():
-    if not is_black_prison_time():
-        return
-    for user_id, session in ACTIVE_BLACK_PRISON_SESSIONS.items():
-        session["online_violation_count"] += 1
+  自动辨别【国法】或【家法】并随机调度刑罚。
+  """
+  prompt = f"""
+    你现在是至高无上、执掌无情家法与国法的「女王大人」。
+    下方是你的卑微男奴/罪人呈上的一段奏疏/汇报：
+    "{user_message}"
 
-async def get_punishment_channel(guild):
-    """自动寻找名为 punishment-room 的专属刑罚大殿"""
-    for channel in guild.text_channels:
-        if channel.name == PUNISHMENT_ROOM_NAME:
-            return channel
-    return None
+    请你以女王的口吻执行以下审判任务：
+    1. 【罪名定性】：判断其究竟触犯了「国法」（如公开打卡迟到、考勤疏漏、常规纪律违背）还是「家法」（如深夜起居失律、作息不规律、私密仪态与自我约束违背）。
+    2. 【刑罚随机调度】：根据罪行轻重，随机判处对应的杖责（例如杖责三十大板、五十大板）以及黑牢禁闭时间。
+    3. 【输出格式要求】：必须严格以纯 JSON 格式返回，不要包含任何 markdown 标记（如 ```json ... ```），格式如下：
+    {{
+      "category": "国法" 或 "家法",
+      "crime_name": "精炼的罪名描述",
+      "sentence": "女王大人对罪奴的冷酷训诫与判词",
+      "punishment": "具体的刑罚（如：杖责三十大板，禁闭黑牢 15 分钟）"
+    }}
+    """
 
-# ==========================================
-# 【核心指令：颁布判罪书、跪看个人档案、领板子】
-# ==========================================
-
-@bot.command(name="issue_warrant")
-@commands.has_permissions(administrator=True)
-async def issue_warrant(ctx, member: discord.Member, days: int, *, crime_reason: str):
-    """女王专用：下发正式《大周御前正式判罪书》并打入黑牢"""
-    user_id = member.id
-    
-    # 记录黑牢刑期
-    ACTIVE_BLACK_PRISON_SESSIONS[user_id] = {
-        "reason": crime_reason,
-        "total_days": days,
-        "current_day": 1,
-        "daily_lashes": 30,
-        "online_violation_count": 0
-    }
-    
-    # 格式化正式判罪书
-    warrant_text = (
-        f"📜 **【大周御前正式判罪书】**\n"
-        f"* **案号**：大周刑字〔{datetime.now().strftime('%Y-%m%d')}〕第 0806 号\n"
-        f"* **涉案国民**：{member.mention}\n"
-        f"* **触犯铁律**：违反《大周国家登记法令》与宵禁条例 ({crime_reason})\n"
-        f"* **御前判决**：数罪并罚，判处黑牢收监 **{days} 天**。每日必须在早晨升堂时受领私密家法 **30 大板**（杖责至屁股开花以惩效尤）。\n"
-        f"* —— *大周女王 御前钦此*"
+  try:
+    response = gemini_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
     )
-    
-    # 存入个人档案库（供罪人随时跪看）
-    if user_id not in USER_CRIME_RECORDS:
-        USER_CRIME_RECORDS[user_id] = []
-    USER_CRIME_RECORDS[user_id].append(warrant_text)
-    OFFICIAL_ARCHIVES.append(f"【正式判罪】{member.name} 触犯国法，判监 {days} 天。")
 
-    # 投递至 punishment-room
-    p_channel = await get_punishment_channel(ctx.guild)
-    target_channel = p_channel if p_channel else ctx.channel
-    await target_channel.send(warrant_text)
-    if target_channel != ctx.channel:
-        await ctx.send(f"⚡ 判罪书已正式下发至 #{PUNISHMENT_ROOM_NAME} 刑罚大殿！")
+    import json
 
-@bot.command(name="my_crimes")
-async def my_crimes(ctx):
-    """罪人随时跪看自己的国家与家法判刑记录"""
-    user_id = ctx.author.id
-    if user_id not in USER_CRIME_RECORDS or not USER_CRIME_RECORDS[user_id]:
-        await ctx.send(f"⚖️ 【大周档案局】回禀 {ctx.author.mention}，你目前案底清白，未有国法判罪书记录。")
-        return
-        
-    records = "\n\n".join(USER_CRIME_RECORDS[user_id])
-    await ctx.send(f"跪下！以下是你的 **【个人国法与家法判刑全记录】**，一目了然：\n\n{records}")
+    text = response.text.strip()
+    if text.startswith("```json"):
+      text = text[7:]
+    if text.endswith("```"):
+      text = text[:-3]
+
+    result = json.loads(text.strip())
+    return result
+  except Exception as e:
+    print(f"AI 审判解析异常: {e}")
+    return {
+        "category": "国法",
+        "crime_name": "言行无状，思虑不周",
+        "sentence": "奴才好大的胆子，连呈奏都语无伦次，着令拖下去杖责二十！",
+        "punishment": "杖责二十大板",
+    }
 
 
-# ==========================================
-# 【事件监听与审讯系统】
-# ==========================================
+# ==================== 3. Bot 事件监听与审判触发 ====================
 @bot.event
 async def on_ready():
-    print(f"大周刑部大总管 {bot.user} 已登基！当前黑牢在押：{len(ACTIVE_BLACK_PRISON_SESSIONS)}")
+  print(f"【大周刑部】大总管已就位，恭迎女王大人降临！当前 Bot 身份: {bot.user}")
+
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
-        return
+  # 避免 Bot 自己触发自己的消息
+  if message.author.bot:
+    return
 
-    content = message.content
-    now_str = datetime.now().strftime("%H:%M")
-    user_id = message.author.id
-    is_in_punishment_room = (message.channel.name == PUNISHMENT_ROOM_NAME)
+  # 锁定 punishment-room 频道
+  punishment_channel = discord.utils.get(
+      message.guild.text_channels, name=PUNISHMENT_ROOM_NAME
+  )
+  target_channel = punishment_channel if punishment_channel else message.channel
 
-    # 1. 凡走过必留痕
-    OFFICIAL_ARCHIVES.append(f"[{now_str}] {message.author.name} 在 #{message.channel.name} 留痕：{content}")
+  # 监听罪奴的奏疏关键词
+  trigger_keywords = [
+      "报告",
+      "迟到",
+      "忘记",
+      "打卡",
+      "半夜",
+      "起床",
+      "罪",
+      "小人",
+      "奴",
+      "错",
+      "作息",
+  ]
+  if any(kw in message.content for kw in trigger_keywords):
+    # 后台交由 Gemini 审判
+    ruling = await analyze_and_judge_crime(message.content)
 
-    # 2. 罪人每日领板子（如：领取第二天的三十大板）
-    if "领取" in content or "领板子" in content or "三十大板" in content:
-        if user_id in ACTIVE_BLACK_PRISON_SESSIONS:
-            session = ACTIVE_BLACK_PRISON_SESSIONS[user_id]
-            reply = (
-                f"⚖️ 【大周女王】准奏！犯人 {message.author.mention} 正在服刑第 {session['current_day']}/{session['total_days']} 天。\n"
-                f"今日之 **{session['daily_lashes']} 大板** 刑罚执行完毕，家规私刑已生效，屁股开花以儆效尤！\n"
-                f"继续回黑牢反省，明日请早起续领！"
-            )
-            session['current_day'] += 1
-            if session['current_day'] > session['total_days']:
-                reply += f"\n🎉 恭喜犯人刑满释放！黑牢档案已解除。"
-                del ACTIVE_BLACK_PRISON_SESSIONS[user_id]
-            
-            await message.channel.send(reply)
-            return
+    category = ruling.get("category", "国法")
+    crime_name = ruling.get("crime_name", "违抗律法")
+    sentence = ruling.get("sentence", "革职查办")
+    punishment = ruling.get("punishment", "杖责三十大板")
 
-    # 3. 身份证打卡或常规交互
-    if "早安" in content or "打卡" in content:
-        reply_msg = f"⚖️ 【大周女王】国民 {message.author.mention} 身份证打卡成功（留痕时间 {now_str}）。"
-        if is_in_punishment_room:
-            reply_msg += "（身处惩戒室，望尔时刻反省自身罪责！）"
-        await message.channel.send(reply_msg)
+    # 构建女王大人专属的审判 Embed 罪状书
+    embed = discord.Embed(
+        title=f"⚖️ 【女王御前审判庭】-{category}判罪书",
+        description=(
+            f"**受刑罪奴**：{message.author.mention}\n**呈上奏疏**："
+            f"`{message.content}`\n\n-----------------------------------\n"
+            f"📜 **律法分类**：`{category}`\n🔍 **查明罪名**：`{crime_name}`\n🏛️"
+            f" **女王圣裁**：\n> *{sentence}*\n\n⛓️ **执行刑罚**：`{punishment}`"
+        ),
+        color=0x8B0000,  # 肃杀的深红
+    )
+    embed.set_footer(
+        text="大周内侍省・無光墨牢 —— 罚单已下达，案卷永久存档。"
+    )
 
-    elif "半夜" in content or "忘记打卡" in content:
-        reply_msg = (
-            f"⚖️ 【大周女王】好大胆子！竟敢在 #{message.channel.name} 呈奏「{content}」。"
-            f"未带身份证且深夜逗留，当心女王的《御前正式判罪书》直接将你收监！"
-        )
-        await message.channel.send(reply_msg)
+    # 女王大人亲自降罪宣判
+    await target_channel.send(
+        content=(
+            f"⚡ 听候法旨！罪奴 {message.author.mention}"
+            " 竟敢犯案，女王大人当庭宣判："
+        ),
+        embed=embed,
+    )
 
-    await bot.process_commands(message)
+  await bot.process_commands(message)
 
-# ==========================================
-# 异步 Web 保活与主程序
-# ==========================================
-async def 管道响应(request):
-    return web.Response(text="The Supreme Queen's Court and Punishment Room are active.")
 
-async def 主程序():
-    app = web.Application()
-    app.router.add_get('/', 管道响应)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    async with bot:
-        if not check_curfew_online_violation.is_running():
-            check_curfew_online_violation.start()
-        await bot.start(os.getenv("DISCORD_TOKEN"))
-
+# ==================== 4. 启动程序 ====================
 if __name__ == "__main__":
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        asyncio.run(Main()) if 'Main' in locals() else asyncio.run(主程序())
+  if DISCORD_TOKEN:
+    bot.run(DISCORD_TOKEN)
+  else:
+    print("错误：未找到 DISCORD_TOKEN 环境变量！")
