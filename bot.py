@@ -43,15 +43,11 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 专属惩戒大殿频道名称
-PUNISHMENT_ROOM_NAME = "punishment-room"
-
-# 设置大周时区（可根据实际需要调整，默认采用本地时间或指定时区）
-# 假设使用本地系统时间或调整为对应时区
-LOCAL_TZ = timezone.utc  # 实际部署时可改为主流运行时的时区对象
+# 专属绝对隔离牢房频道名称
+ISOLATION_ROOM_NAME = "绝对隔离牢房"
 
 
-# ==================== 2. 后台 Gemini 智能审判核心函数（女王大人视角） ====================
+# ==================== 2. 后台 Gemini 智能审判核心函数 ====================
 async def analyze_and_judge_crime(user_message: str) -> dict:
   prompt = f"""
     你现在是至高无上、执掌无情家法与国法的「女王大人」。
@@ -97,55 +93,46 @@ async def analyze_and_judge_crime(user_message: str) -> dict:
 # ==================== 3. 定时器：大周作息与 8:00 审判出狱大典 ====================
 @tasks.loop(minutes=1)
 async def grand_prison_judgment_loop():
-  """每分钟检查一次时间。
-
-  若到达早上 8:00，执行黑牢统一审判、放监出狱或加重惩罚； 若到达晚上 10:00 (22:00)，执行宵禁就寝通告。
-  """
-  now = datetime.now()  # 实际应用可对齐特定时区
+  now = datetime.now()
   current_hour = now.hour
   current_minute = now.minute
-  current_weekday = now.weekday()  # 0是周一，6是周日
+  current_weekday = now.weekday()
 
-  # 周五 8:00 AM 到周日 8:00 PM 属于长休期间，可做相应跳过或休眠判定
-  # 每天早上 8:00 准时进行放监出狱/加重惩罚大典
+  # 每天早上 8:00 准时进行放监出狱/解除隔离大典
   if current_hour == 8 and current_minute == 0:
-    # 排除周五 8:00 至周日 20:00 之间的周末长休闭关期
-    # 周五 weekday=4, 周六 weekday=5, 周日 weekday=6
     is_weekend_rest = (current_weekday == 4) or (current_weekday == 5) or (
         current_weekday == 6 and now.hour < 20
     )
 
     if not is_weekend_rest:
       for guild in bot.guilds:
-        punishment_channel = discord.utils.get(
-            guild.text_channels, name=PUNISHMENT_ROOM_NAME
+        isolation_channel = discord.utils.get(
+            guild.text_channels, name=ISOLATION_ROOM_NAME
         )
-        if punishment_channel:
+        if isolation_channel:
           embed = discord.Embed(
               title="🏛️ 【大周黑牢·晨时大审】",
               description=(
-                  "**时辰已至（晨 08:00）**：\n黑牢大门开启！所有服刑罪奴今日之表现已呈递御前。"
-                  "\n\n⚡ **女王圣裁**：\n> *经查验，未达标者罪加一等、继续锁拿；符合规制者准予开释出狱！*"
+                  "**时辰已至（晨 08:00）**：\n绝对隔离牢房大门开启！今日刑满之罪奴可恢复自由。"
+                  "\n\n⚡ **女王圣裁**：\n> *经查验，未达标者继续锁拿禁言；合规者准予开释出狱！*"
               ),
               color=0x8B0000,
           )
-          embed.set_footer(
-              text="大周内侍省・無光墨牢 —— 每日早朝放监与加刑大典"
-          )
-          await punishment_channel.send(
-              content="🔔 **【钟声鸣响】早朝放监时刻已到，黑牢罪奴听旨！**",
+          embed.set_footer( text="大周内侍省・絕對隔离牢房 —— 每日早朝放监与解禁大典")
+          await isolation_channel.send(
+              content="🔔 **【钟声鸣响】早朝放监时刻已到，隔离牢房罪奴听旨！**",
               embed=embed,
           )
 
   # 每天晚上 10:00 (22:00) 宵禁就寝提醒
   elif current_hour == 22 and current_minute == 0:
     for guild in bot.guilds:
-      punishment_channel = discord.utils.get(
-          guild.text_channels, name=PUNISHMENT_ROOM_NAME
+      isolation_channel = discord.utils.get(
+          guild.text_channels, name=ISOLATION_ROOM_NAME
       )
-      if punishment_channel:
-        await punishment_channel.send(
-            "🌙 **【大周宵禁令】夜深十点已至！各方罪奴必须熄灯上床歇息，胆敢违抗者，明日数罪并罚！**"
+      if isolation_channel:
+        await isolation_channel.send(
+            "🌙 **【大周宵禁令】夜深十点已至！各方罪奴必须熄灯上床歇息！**"
         )
 
 
@@ -154,7 +141,7 @@ async def before_loop():
   await bot.wait_until_ready()
 
 
-# ==================== 4. Bot 事件监听与黑牢分流审判 ====================
+# ==================== 4. Bot 事件监听与完美隔离分流 ====================
 @bot.event
 async def on_ready():
   print(
@@ -169,15 +156,33 @@ async def on_message(message):
   if message.author.bot:
     return
 
-  # 寻找专属的 punishment-room 黑牢频道
-  punishment_channel = discord.utils.get(
-      message.guild.text_channels, name=PUNISHMENT_ROOM_NAME
+  isolation_channel = discord.utils.get(
+      message.guild.text_channels, name=ISOLATION_ROOM_NAME
   )
 
-  # 若找不到黑牢频道，则在当前频道兜底；若找得到，铁律宣判统一强制推送到 #punishment-room
-  target_channel = punishment_channel if punishment_channel else message.channel
+  # 【绝对隔离权限控制】：如果罪奴胆敢在 #绝对隔离牢房 里面发言说话，直接予以静音拦截，并警告其此地只许看判词
+  if isolation_channel and message.channel.id == isolation_channel.id:
+    # 瞬间剥夺其在隔离室的发言权限（禁言）
+    try:
+      await isolation_channel.set_permissions(message.author, send_messages=False)
+    except Exception as ex:
+      print(f"权限调整异常: {ex}")
 
-  # 执行 Gemini 审判
+    # 删除其违规发言，维护黑牢纯净
+    try:
+      await message.delete()
+    except Exception as ex:
+      print(f"清理违规发言异常: {ex}")
+
+    # 仅降下警告，不进行二次AI审判，保持黑牢纯净
+    warning_msg = await isolation_channel.send(
+        f"⚡ **【绝对隔离禁令】** 罪奴 {message.author.mention} 敢在黑牢喧哗！此地唯准阅看女王判词，已将你**就地禁言**，闭门思过！"
+    )
+    # 5秒后自动擦除警告提示，保持黑牢绝对干净整洁
+    await warning_msg.delete(delay=5)
+    return
+
+  # ==================== 正常日常频道（如 #general）的互动与存档 ====================
   ruling = await analyze_and_judge_crime(message.content)
 
   category = ruling.get("category", "国法")
@@ -185,6 +190,7 @@ async def on_message(message):
   sentence = ruling.get("sentence", "准奏，退下吧。")
   punishment = ruling.get("punishment", "免于杖责")
 
+  # 1. 在当前聊天室实时互动宣判
   embed = discord.Embed(
       title=f"⚖️ 【女王御前审判庭】-{category}判罪书",
       description=(
@@ -195,20 +201,34 @@ async def on_message(message):
       ),
       color=0x8B0000,
   )
-  embed.set_footer(
-      text=(
-          "大周内侍省・無光墨牢 —— 罚单已下达，案卷永久存留于黑牢不得篡改。"
-      )
-  )
+  embed.set_footer(text="大周内侍省 —— 罚单已下达，案卷已同步移送绝对隔离牢房。")
 
-  # 将审判书精准强制推送到 punishment-room 铁律黑牢
-  await target_channel.send(
-      content=(
-          f"⚡ 听候法旨！罪奴 {message.author.mention} 在"
-          f" `#{message.channel.name}` 呈上奏疏，女王大人当庭裁决："
-      ),
+  await message.channel.send(
+      content=f"⚡ 听候法旨！罪奴 {message.author.mention} 呈上奏疏，女王大人当庭裁决：",
       embed=embed,
   )
+
+  # 2. 【绝对隔离牢房归档与禁言惩戒】：将罪状抄送至 #绝对隔离牢房，并自动将该罪奴在隔离牢房中设为禁言
+  if isolation_channel:
+    try:
+      # 强制设置该罪奴在隔离牢房中无权发言（只能看判词）
+      await isolation_channel.set_permissions(message.author, send_messages=False)
+    except Exception as ex:
+      print(f"设置隔离权限异常: {ex}")
+
+    archive_embed = discord.Embed(
+        title=f"📁 【绝对隔离档案】-{category}罪状记录",
+        description=(
+            f"**服刑罪奴**：{message.author.mention}\n**案发频道**："
+            f"`#{message.channel.name}`\n**呈奏内容**：`{message.content}`\n\n-----------------------------------\n"
+            f"📜 **律法分类**：`{category}`\n🔍 **定罪名称**：`{crime_name}`\n🏛️"
+            f" **女王判词**：\n> *{sentence}*\n\n⛓️ **判决刑罚**：`{punishment}`\n🔒"
+            " **状态**：`已押入绝对隔离牢房，剥夺发言权`"
+        ),
+        color=0x4A0000,
+    )
+    archive_embed.set_footer(text=f"入狱归档时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    await isolation_channel.send(content=f"📥 【黑牢收监】罪奴 {message.author.mention} 因触犯律法已被押入隔离牢房：", embed=archive_embed)
 
   await bot.process_commands(message)
 
