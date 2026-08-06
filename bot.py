@@ -1,4 +1,5 @@
 import http.server
+import json
 import os
 import random
 import threading
@@ -7,7 +8,6 @@ from discord.ext import commands
 from google import genai
 
 # ==================== 0. 应对 Render 免费端口要求的轻量 Web 服务 ====================
-# Render 会要求 Web Service 监听一个端口（通常由环境变量 PORT 提供，默认 10000）
 PORT = int(os.environ.get("PORT", 10000))
 
 
@@ -19,7 +19,6 @@ class DummyHandler(http.server.BaseHTTPRequestHandler):
     self.wfile.write(b"Bot is alive and running!")
 
   def log_message(self, format, *args):
-    # 屏蔽不必要的 HTTP 访问日志，保持日志清爽
     pass
 
 
@@ -30,10 +29,8 @@ def run_web_server():
   httpd.serve_forever()
 
 
-# 启动一个独立线程运行 HTTP 服务，不影响 Discord Bot 的主循环
 web_thread = threading.Thread(target=run_web_server, daemon=True)
 web_thread.start()
-
 
 # ==================== 1. 初始化各项配置 ====================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -57,7 +54,7 @@ async def analyze_and_judge_crime(user_message: str) -> dict:
     "{user_message}"
 
     请你以女王的口吻执行以下审判任务：
-    1. 【罪名定性】：判断其究竟触犯了「国法」（如公开打卡迟到、考勤疏漏、常规纪律违背）还是「家法」（如深夜起居失律、作息不规律、私密仪态与自我约束违背）。
+    1. 【罪名定性】：判断其究竟触犯了「国法」（如公开打卡迟到、考勤疏漏、常规纪律违背）还是「家法」（如深夜起居失律、作息不规律、私密仪态与自我约束违背），或者只是普通的日常觐见。
     2. 【刑罚随机调度】：根据罪行轻重，随机判处对应的杖责（例如杖责三十大板、五十大板）以及黑牢禁闭时间。
     3. 【输出格式要求】：必须严格以纯 JSON 格式返回，不要包含任何 markdown 标记（如 ```json ... ```），格式如下：
     {{
@@ -73,8 +70,6 @@ async def analyze_and_judge_crime(user_message: str) -> dict:
         model="gemini-2.5-flash",
         contents=prompt,
     )
-
-    import json
 
     text = response.text.strip()
     if text.startswith("```json"):
@@ -110,48 +105,28 @@ async def on_message(message):
   )
   target_channel = punishment_channel if punishment_channel else message.channel
 
-  trigger_keywords = [
-      "报告",
-      "迟到",
-      "忘记",
-      "打卡",
-      "半夜",
-      "起床",
-      "罪",
-      "小人",
-      "奴",
-      "错",
-      "作息",
-  ]
-  if any(kw in message.content for kw in trigger_keywords):
-    ruling = await analyze_and_judge_crime(message.content)
+  # 【已移除关键词卡控】只要国民发言，一律送交女王大人审判，彻底根除“失语”现象
+  ruling = await analyze_and_judge_crime(message.content)
 
-    category = ruling.get("category", "国法")
-    crime_name = ruling.get("crime_name", "违抗律法")
-    sentence = ruling.get("sentence", "革职查办")
-    punishment = ruling.get("punishment", "杖责三十大板")
+  category = ruling.get("category", "国法")
+  crime_name = ruling.get("crime_name", "日常呈奏")
+  sentence = ruling.get("sentence", "准奏，退下吧。")
+  punishment = ruling.get("punishment", "免于杖责")
 
-    embed = discord.Embed(
-        title=f"⚖️ 【女王御前审判庭】-{category}判罪书",
-        description=(
-            f"**受刑罪奴**：{message.author.mention}\n**呈上奏疏**："
-            f"`{message.content}`\n\n-----------------------------------\n"
-            f"📜 **律法分类**：`{category}`\n🔍 **查明罪名**：`{crime_name}`\n🏛️"
-            f" **女王圣裁**：\n> *{sentence}*\n\n⛓️ **执行刑罚**：`{punishment}`"
-        ),
-        color=0x8B0000,
-    )
-    embed.set_footer(
-        text="大周内侍省・無光墨牢 —— 罚单已下达，案卷永久存档。"
-    )
+  embed = discord.Embed(
+      title=f"⚖️ 【女王御前审判庭】-{category}判罪书",
+      description=(
+          f"**受刑罪奴**：{message.author.mention}\n**呈上奏疏**：`{message.content}`\n\n-----------------------------------\n"
+          f"📜 **律法分类**：`{category}`\n🔍 **查明罪名**：`{crime_name}`\n🏛️ **女王圣裁**：\n> *{sentence}*\n\n⛓️ **执行刑罚**：`{punishment}`"
+      ),
+      color=0x8B0000,
+  )
+  embed.set_footer(text="大周内侍省・無光墨牢 —— 罚单已下达，案卷永久存档。")
 
-    await target_channel.send(
-        content=(
-            f"⚡ 听候法旨！罪奴 {message.author.mention}"
-            " 竟敢犯案，女王大人当庭宣判："
-        ),
-        embed=embed,
-    )
+  await target_channel.send(
+      content=f"⚡ 听候法旨！罪奴 {message.author.mention} 呈上奏疏，女王大人当庭裁决：",
+      embed=embed,
+  )
 
   await bot.process_commands(message)
 
