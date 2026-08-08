@@ -83,5 +83,4 @@ async def on_message(message: discord.Message):
   await bot.process_commands(message)
 
 
-# 启动你的 Bot（请确保已在环境变量或此处正确配置 Token）
-# bot.run("YOUR_BOT_TOKEN")
+bot.run(os.environ.get("DISCORD_TOKEN")) # 或者填入你的真实 Token
