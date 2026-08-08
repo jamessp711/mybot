@@ -41,7 +41,7 @@ async def on_ready():
 
 
 @bot.event
-async def on_message(message: discord.Messa
+async def on_message(message: discord.Message):
   # 严禁 Bot 自我审判触发死循环
   if message.author.bot:
     return
@@ -83,5 +83,5 @@ async def on_message(message: discord.Messa
   await bot.process_commands(message)
 
 
-# 启动你的 Bot（请填入你的 Discord Bot Token）
+# 启动你的 Bot（请确保已在环境变量或此处正确配置 Token）
 # bot.run("YOUR_BOT_TOKEN")
