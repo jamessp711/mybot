@@ -62,7 +62,8 @@ async def analyze_and_judge_crime(member: discord.Member, user_message: str) -> 
             time_crime_desc = "扰乱圣驾休沐罪：胆敢在法定假日/周日私闯公堂、得过且过"
 
     # 深度语义剖析：若字里行间带有敷衍、欺瞒、不敬或把大周当儿戏，直接顶格重判！
-    is_deceitful_or_playful = any(word in user_message for: "玩" in user_message or "随便" in user_message or "开玩笑" in user_message or "不小心" in user_message)
+    keywords = ["玩", "随便", "开玩笑", "不小心"]
+    is_deceitful_or_playful = any(word in user_message for word in keywords) 
 
     if time_crime_flag:
         category = "时空重罪"
