@@ -1,384 +1,172 @@
-import http.server
-import json
 import os
-import threading
-from datetime import datetime, timedelta
+import datetime
+import asyncio
+from flask import Flask
+from threading import Thread
 import discord
-from discord.ext import commands, tasks
-from google import genai
+from discord.ext import commands
 
-# ==================== 0. 应对 Render 免费端口要求的轻量 Web 服务 ====================
-PORT = int(os.environ.get("PORT", 10000))
+# ==================== 1. Render 保持连线机制 (Keep-Alive) ====================
+app = Flask('')
 
+@app.route('/')
+def home():
+    return "大周內侍省・無光墨牢運作中，女王威嚴永存。"
 
-class DummyHandler(http.server.BaseHTTPRequestHandler):
+def run():
+    app.run(host='0.0.0.0', port=8080)
 
-  def do_GET(self):
-    self.send_response(200)
-    self.end_headers()
-    self.wfile.write(b"Bot is alive and running!")
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
-  def log_message(self, format, *args):
-    pass
-
-
-def run_web_server():
-  server_address = ("", PORT)
-  httpd = http.server.HTTPServer(server_address, DummyHandler)
-  print(f"【HTTP 守卫】已在端口 {PORT} 启动，专供 Render 扫描。")
-  httpd.serve_forever()
-
-
-web_thread = threading.Thread(target=run_web_server, daemon=True)
-web_thread.start()
-
-# ==================== 1. 初始化各项配置 ====================
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-gemini_client = genai.Client()
-
+# ==================== 2. Discord Bot 初始化与意图设置 ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 专属频道名称
-ISOLATION_ROOM_NAME = "絕對隔離牢房"  # 国法长期坐牢与沉淀档案库
-PUNISHMENT_LOG_NAME = "punishment-room"  # 全面惩罚与行为不检数据记录台
-
-# ----------------- 全局状态管理 -----------------
-PRISON_RECORDS = {}
-# 行为评分：初始 100 分。表现好/打卡加分，频繁违纪扣分
-BEHAVIOR_SCORE = 100
-
+# 基础数值与心境模拟
+BEHAVIOR_SCORE = 50
 
 def get_mood_instruction():
-  """根据表现分动态控制女王的心境与态度"""
-  if BEHAVIOR_SCORE >= 120:
-    return "【宽容慈悲】Sub 表现优异，今日女王心情大好，判罚从轻，语气温柔爱护。"
-  elif BEHAVIOR_SCORE <= 60:
-    return "【雷霆暴怒】Sub 屡教不改，数据持续下跌！女王已彻底失去耐心，瞬间板起脸孔，言语冷酷无情，必须从重处罚！"
-  return "【冷峻威严】赏罚分明，正常行使大周律法。"
+    if BEHAVIOR_SCORE < 30:
+        return "极度暴怒、严厉，对罪奴百般挑剔，动辄加重惩罚。"
+    elif BEHAVIOR_SCORE < 60:
+        return "冷酷、高傲、居高臨下，对罪奴的剖白不屑一顧。"
+    else:
+        return "威严、冷漠，勉强维持女王的仪态。"
 
+# ==================== 3. 八月时空铁律与审判核心逻辑 ====================
+async def analyze_and_judge_crime(member: discord.Member, user_message: str) -> dict:
+    now = datetime.datetime.now()
+    current_month = now.month
+    current_hour = now.hour
+    current_weekday = now.weekday() # 0-6 代表周一到周日
+    
+    # 判定 8 月份时空铁律
+    is_august = (current_month == 8)
+    is_curfew = (current_hour >= 22 or current_hour < 6)
+    is_holiday_or_weekend = (current_weekday >= 5) # 周六、周日
+    
+    time_crime_flag = False
+    time_crime_desc = ""
+    
+    if is_august:
+        if is_curfew:
+            time_crime_flag = True
+            time_crime_desc = "触犯宵禁密令罪：深夜游荡，不知收敛"
+        elif is_holiday_or_weekend:
+            time_crime_flag = True
+            time_crime_desc = "扰乱圣驾休沐罪：胆敢在法定假日/周日私闯公堂、滋扰圣听"
 
-# ==================== 2. 后台纯净 Gemini 审判（含动态心境与特赦） ====================
-async def analyze_and_judge_crime(user_message: str) -> dict:
-  # 【安寝特赦防线】：若检测到深夜告退或睡觉言语，直接免罪，绝不触发禁言
-  sleep_keywords = ["晚安", "去睡了", "睡觉", "安歇", "休息", "打卡睡觉"]
-  if any(k in user_message for k in sleep_keywords):
+    category = "时空重罪" if time_crime_flag else ("肺腑感悟" if "肺腑" in user_message or "安" in user_message else "触犯家法")
+    crime_name = time_crime_desc if time_crime_flag else ("常规奏疏审视" if category == "肺腑感悟" else "言辞不够恭顺")
+    
+    if time_crime_flag:
+        sentence = f"放肆！竟敢在「{crime_name}」之时段冒犯圣驾，任凭你字句如何天花乱坠，罪加一等！"
+        duration_minutes = 30
+        timeout_minutes = 15
+        new_nick = "罪奴-休沐重犯"
+        punishment_type = "大板鞭刑、剥去外衣与耻辱烙印"
+    elif category == "肺腑感悟":
+        sentence = "准奏。念你尚算懂事、知所进退，暂且记下你的肺腑之言。"
+        duration_minutes = 15
+        timeout_minutes = 0
+        new_nick = None
+        punishment_type = "口头嘉奖，准予免罪"
+    else:
+        sentence = "奴才安敢如此放肆！字里行间毫无敬意，当受惩戒！"
+        duration_minutes = 20
+        timeout_minutes = 5
+        new_nick = "罪奴-思过中"
+        punishment_type = "笞刑二十，禁言反省"
+
     return {
-        "law_type": "特赦",
-        "crime_name": "安寝请退",
-        "sentence": (
-            "准奏，退下歇息。今日朕允你安睡，不计前嫌，明日早朝再来领受规制。"
-        ),
-        "duration_minutes": 0,
+        "category": category,
+        "crime_name": crime_name,
+        "sentence": sentence,
+        "duration_minutes": duration_minutes,
+        "timeout_minutes": timeout_minutes,
+        "new_nick": new_nick,
+        "punishment_type": punishment_type
     }
 
-  mood_instruction = get_mood_instruction()
-
-  prompt = f"""
-    你现在是执掌无情家法与国法的「女王大人」（Dom）。
-    对方是你的 Sub/Bottom（罪奴），需要你严加管教。
-    
-    【当前女王心境】：{mood_instruction}
-    【Sub 行为表现分】：{BEHAVIOR_SCORE}
-    
-    下方是你的 Sub 呈上的一段奏疏/汇报：
-    "{user_message}"
-
-    请你以女王的口吻输出审判结果，必须严格以纯 JSON 格式返回，不要包含任何 markdown 标记（如 ```json ... ```），格式如下：
-    {{
-      "law_type": "国法" 或 "家法",
-      "crime_name": "精炼的罪名描述",
-      "sentence": "女王大人根据当前心境对罪奴的训诫与判词",
-      "duration_minutes": 15 或 30 或 60 (仅当 law_type 为“家法”时生效，若心情好可填 5，心情差填 60)
-    }}
-    """
-
-  try:
-    response = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-    )
-    text = response.text.strip()
-    if text.startswith("```json"):
-      text = text[7:]
-    if text.endswith("```"):
-      text = text[:-3]
-    return json.loads(text.strip())
-  except Exception as e:
-    print(f"AI 审判解析异常: {e}")
-    return {
-        "law_type": "家法",
-        "crime_name": "日常行为不检",
-        "sentence": "呈奏语无伦次，先领家法小惩 15 分钟思过！",
-        "duration_minutes": 15,
-    }
-
-
-# ==================== 3. 国法大周核心时间轴：早朝 8:00 与 夜间 22:00 铁律循环 ====================
-@tasks.loop(minutes=1)
-async def grand_prison_judgment_loop():
-  now = datetime.now()
-  current_hour = now.hour
-  current_minute = now.minute
-
-  if current_hour == 8 and current_minute == 0:
-    for guild in bot.guilds:
-      isolation_channel = discord.utils.get(
-          guild.text_channels, name=ISOLATION_ROOM_NAME
-      )
-      if not isolation_channel or not PRISON_RECORDS:
-        continue
-
-      released_users = []
-      punished_users = []
-
-      for user_id, record in list(PRISON_RECORDS.items()):
-        member = guild.get_member(user_id)
-        if not member:
-          continue
-
-        record["days_left"] -= 1
-
-        if record["days_left"] <= 0:
-          released_users.append(member)
-          try:
-            await isolation_channel.set_permissions(member, send_messages=None)
-          except Exception:
-            pass
-          del PRISON_RECORDS[user_id]
-        else:
-          punished_users.append((member, record["days_left"]))
-
-      embed = discord.Embed(
-          title="🏛️ 【大周黑牢・晨时早朝大审】",
-          description=(
-              "**时辰已至（晨 08:00）**：\n女王大人升殿，对黑牢重犯进行红头文件审判！"
-              f"\n\n🕊️ **准予开释出狱之重犯**：\n"
-              + (
-                  "\n".join([m.mention for m in released_users])
-                  if released_users
-                  else "无（无一人达标）"
-              )
-              + f"\n\n⛓️ **改造未达标、继续加刑/锁拿之重犯**：\n"
-              + (
-                  "\n".join([f"{m.mention} (余刑: {d} 监禁日)" for m, d in punished_users])
-                  if punished_users
-                  else "无"
-              )
-          ),
-          color=0x8B0000,
-      )
-      embed.set_footer(
-          text="大周刑部 —— 严格执行夜 22:00 至晨 06:00 监禁大循环"
-      )
-      await isolation_channel.send(
-          content="🔔 **【早朝钟声鸣响】早朝大审开始，黑牢重犯听旨！**",
-          embed=embed,
-      )
-
-  elif current_hour == 22 and current_minute == 0:
-    for guild in bot.guilds:
-      isolation_channel = discord.utils.get(
-          guild.text_channels, name=ISOLATION_ROOM_NAME
-      )
-      if isolation_channel and PRISON_RECORDS:
-        await isolation_channel.send(
-            "🌙 **【大周宵禁令】夜间 10 点已至！新的一轮黑牢监禁周期开始计算，所有在押重犯继续锁拿思过！**"
-        )
-
-
-@grand_prison_judgment_loop.before_loop
-async def before_loop():
-  await bot.wait_until_ready()
-
-
-# ==================== 4. 消息监听与审判分流 ====================
+# ==================== 4. 全局监听与中央档案库同步执行 ====================
 @bot.event
 async def on_ready():
-  print(
-      f"【大周刑部】大总管已就位，恭迎女王大人降临！当前 Bot 身份: {bot.user}"
-  )
-  if not grand_prison_judgment_loop.is_running():
-    grand_prison_judgment_loop.start()
-
+    print(f'大周女王化身已顺利降临: {bot.user.name} (ID: {bot.user.id})')
+    print('大周內侍省・無光墨牢防线全部稳固，中央档案库同步机制已就绪。')
 
 @bot.event
-async def on_message(message):
-  global BEHAVIOR_SCORE
-  if message.author.bot:
-    return
+async def on_message(message: discord.Message):
+    # 忽略 Bot 自身的发言
+    if message.author == bot.user:
+        return
 
-  guild = message.guild
-  if not guild:
-    return
+    # 全局放行：在大周任何频道只要你这罪奴发言，皆视为呈疏或受审
+    # 执行审判分析
+    ruling = await analyze_and_judge_crime(message.author, message.content)
+    
+    category = ruling.get("category")
+    sentence = ruling.get("sentence")
+    timeout_mins = ruling.get("timeout_minutes", 0)
+    new_nick = ruling.get("new_nick")
+    punishment = ruling.get("punishment_type")
+    
+    response_text = f"👑 **【大周御前中央刑名档案】** - 圣裁下达\n" \
+                    f"案发殿宇：{message.channel.mention}\n" \
+                    f"罪奴：{message.author.mention}\n" \
+                    f"罪名：`{ruling.get('crime_name')}`\n" \
+                    f"判词：{sentence}\n" \
+                    f"刑罚手段：{punishment}"
 
-  isolation_channel = discord.utils.get(
-      guild.text_channels, name=ISOLATION_ROOM_NAME
-  )
-  log_channel = discord.utils.get(
-      guild.text_channels, name=PUNISHMENT_LOG_NAME
-  )
+    # 1. 執行改名（耻辱烙印）
+    if new_nick:
+        try:
+            await message.author.edit(nick=new_nick)
+            response_text += f"\n⚠️ **耻辱赐名**：已被强行更改为 `{new_nick}`！"
+        except Exception as e:
+            print(f"改名失败: {e}")
 
-  if isolation_channel and message.channel.id == isolation_channel.id:
-    try:
-      await message.delete()
-    except Exception:
-      pass
+    # 2. 執行 Timeout 禁言
+    if timeout_mins > 0:
+        try:
+            delta = datetime.timedelta(minutes=timeout_mins)
+            await message.author.timeout(delta, reason="触犯大周时空与宵禁铁律")
+            response_text += f"\n🔒 **禁言黑牢**：已被执行 Timeout 禁言 {timeout_mins} 分钟！"
+        except Exception as e:
+            print(f"禁言失败: {e}")
 
-    warning_msg = await isolation_channel.send(
-        f"⚡ **【绝对隔离禁令】** 罪奴 {message.author.mention}"
-        " 身陷黑牢尚敢喧哗！此地唯准阅看女王判词，闭门思过！"
-    )
-    await warning_msg.delete(delay=4)
-    return
+    # 3. 判定是否打入「絕對隔離犯人」黑牢
+    if "重罪" in category or "家法" in category:
+        try:
+            target_role = discord.utils.get(message.guild.roles, name="【絕對隔離犯人】")
+            if target_role:
+                await message.author.add_roles(target_role)
+                response_text += f"\n⛓️ **牢狱之灾**：已被打入【絕對隔離犯人】身份组！"
+        except Exception as e:
+            print(f"加锁失败: {e}")
 
-  # 进行 AI 审判（包含动态心境与安寝特赦）
-  ruling = await analyze_and_judge_crime(message.content)
-
-  law_type = ruling.get("law_type", "家法")
-  crime_name = ruling.get("crime_name", "日常行为不检")
-  sentence = ruling.get("sentence", "准奏，退下。")
-
-  # 如果触发了特赦（如道晚安），直接回复并加分奖励
-  if law_type == "特赦":
-    BEHAVIOR_SCORE += 2  # 安寝乖巧，加分
-    embed = discord.Embed(
-        title="🌙 【女王御前・安寝特赦】",
-        description=(
-            f"**Sub 呈报**：`{message.content}`\n\n📜"
-            f" **女王圣裁**：\n> *{sentence}*"
-        ),
-        color=0x4169E1,
-    )
-    await message.channel.send(
-        content=f"🕊️ 准奏，Sub {message.author.mention} 安歇去吧。",
-        embed=embed,
-    )
-    return
-
-  # ==================== 选项 A：家法裁决（短时禁言 + 行为扣分） ====================
-  if law_type == "家法":
-    BEHAVIOR_SCORE -= 5  # 触犯家法，扣分（若连续被罚，分数下跌会触发女王暴怒）
-    duration_mins = int(ruling.get("duration_minutes", 15))
-    punishment_desc = f"触犯家法，原地短时禁言 {duration_mins} 分钟"
-
-    # 执行 Discord 官方 Timeout
-    try:
-      timeout_duration = timedelta(minutes=duration_mins)
-      await message.author.timeout(
-          timeout_duration, reason=f"家法惩戒: {crime_name}"
-      )
-    except Exception as ex:
-      print(f"执行官方禁言失败: {ex}")
-
-    embed = discord.Embed(
-        title=f"⚖️ 【女王御前家法庭】日常训诫书",
-        description=(
-            f"**受罚 Sub**：{message.author.mention}\n**案发频道**："
-            f"`#{message.channel.name}`\n**违纪行为**：`{message.content}`\n\n-----------------------------------\n"
-            f"📜 **律法性质**：`家法（短时惩戒）`\n🔍 **行为定性**：`{crime_name}`\n🏛️"
-            f" **女王圣裁**：\n> *{sentence}*\n\n⏳"
-            f" **家法执行**：`{punishment_desc}（已启动服务器禁言）`"
-        ),
-        color=0xD4AF37,
-    )
-    await message.channel.send(
-        content=(
-            f"⚠️ 家法降临！Sub {message.author.mention}"
-            " 言行不检，女王当庭训诫并施以禁言："
-        ),
-        embed=embed,
-    )
-
+    # 4. 全局核心机制：无论在哪个角落犯事，判决书必须精准同步到 punishmentlog-room 中
+    log_channel = discord.utils.get(message.guild.text_channels, name="punishmentlog-room")
     if log_channel:
-      log_embed = discord.Embed(
-          title="📁 [Punishment Room - 家法惩罚及行为记录]",
-          description=(
-              f"**受罚人**：{message.author.mention}\n"
-              f"**行为**：`{message.content}`\n"
-              f"**判定罪名**：`{crime_name}`\n"
-              f"**判词**：`{sentence}`\n"
-              f"**当前行为评分**：`{BEHAVIOR_SCORE}`"
-          ),
-          color=0xB8860B,
-      )
-      await log_channel.send(embed=log_embed)
+        await log_channel.send(response_text)
+    else:
+        # 若找不到该名字的频道，则退而求其次在当前频道宣判
+        await message.channel.send(response_text)
 
-  # ==================== 选项 B：国法裁决（重罪：押入黑牢） ====================
-  else:
-    BEHAVIOR_SCORE -= 15  # 重罪扣分大跌，直接触发暴怒
-    assigned_days = 1
-    punishment_desc = (
-        "触犯国法，全服禁言，押入绝对隔离牢房，执行 1 个监禁周期"
-        "（22:00-次日08:00）"
-    )
+    await bot.process_commands(message)
 
-    embed = discord.Embed(
-        title="⚖️ 【女王御前国法庭】重罪判决书",
-        description=(
-            f"**受刑重犯**：{message.author.mention}\n**案发频道**："
-            f"`#{message.channel.name}`\n**违纪行为**：`{message.content}`\n\n-----------------------------------\n"
-            f"📜 **律法性质**：`国法（重罪坐牢）`\n🔍 **查明罪名**：`{crime_name}`\n🏛️"
-            f" **女王圣裁**：\n> *{sentence}*\n\n⛓️ **刑罚执行**：`{punishment_desc}`"
-        ),
-        color=0x8B0000,
-    )
-    await message.channel.send(
-        content=f"⚡ 国法不容情！Sub {message.author.mention} 严重违纪，押入黑牢：",
-        embed=embed,
-    )
-
-    if isolation_channel:
-      try:
-        await isolation_channel.set_permissions(
-            message.author, send_messages=False
-        )
-      except Exception:
-        pass
-
-      if message.author.id in PRISON_RECORDS:
-        PRISON_RECORDS[message.author.id]["days_left"] += assigned_days
-      else:
-        PRISON_RECORDS[message.author.id] = {
-            "days_left": assigned_days,
-            "crime": crime_name,
-            "category": "国法",
-        }
-
-      total_days = PRISON_RECORDS[message.author.id]["days_left"]
-
-      archive_embed = discord.Embed(
-          title="📁 [Punishment Room - 国法重罪收监档案]",
-          description=(
-              f"**服刑重犯**：{message.author.mention}\n"
-              f"**违纪行为**：`{message.content}`\n"
-              f"**定罪**：`{crime_name}`\n"
-              f"**女王判词**：`{sentence}`\n"
-              f"**累积刑期**：`{total_days} 个监禁周期`\n"
-              f"**当前行为评分**：`{BEHAVIOR_SCORE}`"
-          ),
-          color=0x4A0000,
-      )
-      await isolation_channel.send(
-          content=(
-              f"📥 【黑牢收监】重犯 {message.author.mention}"
-              " 因触犯国法被正式收押，全服禁言："
-          ),
-          embed=archive_embed,
-      )
-
-      if log_channel and log_channel.id != isolation_channel.id:
-        await log_channel.send(embed=archive_embed)
-
-  await bot.process_commands(message)
-
-
-# ==================== 5. 启动程序 ====================
+# ==================== 5. 启动总闸 ====================
 if __name__ == "__main__":
-  if DISCORD_TOKEN:
-    bot.run(DISCORD_TOKEN)
-  else:
-    print("错误：未找到 DISCORD_TOKEN 环境变量！")
+    # 启动 Keep-Alive 线程保活 Render
+    keep_alive()
+    
+    # 从环境变量中读取 Discord Bot Token 启动
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        print("错误：未检测到 DISCORD_TOKEN 环境变量！")
+    else:
+        bot.run(TOKEN)
