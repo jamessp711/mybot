@@ -12,10 +12,10 @@ from google_genai import Client
 # 加载环境变量
 load_dotenv()
 
-TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-TOKEN_LAST_CHANGED_STR = os.getenv('TOKEN_LAST_CHANGED', '2026-07-10')
+TOKEN = os.getenv('MTUzMjcxODI4NjU5MTIzNDEyOQ.GMbf-H.wwqfdzEjyFaMiE7vhfuLNQHWKEodAiqPVfw2lM')
+TOKEN_LAST_CHANGED_STR = os.getenv('TOKEN_LAST_CHANGED', '2026-08-10')
 TOKEN_VALID_DAYS = 30
-GOOGLE_GENAI_API_KEY = os.getenv('GOOGLE_GENAI_API_KEY')
+GOOGLE_GENAI_API_KEY = os.getenv('AQ.Ab8RN6LcVEVINPJpueMwFQf1nuJRW9SCF9F-6VA8mb49R6B_0g')
 
 DB_FILE = 'prison_records.json'
 PRISON_START_HOUR = 22
