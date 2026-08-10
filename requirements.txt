@@ -2,3 +2,4 @@ discord.py
 flask
 google-genai
 aiohttp
+python-dotenv
