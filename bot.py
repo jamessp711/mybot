@@ -39,6 +39,9 @@ ISOLATION_CHANNEL_NAME = ROLE_ISOLATION  # 假设频道名与身分组名相同�
 
 SGT = ZoneInfo("Asia/Singapore")
 
+# ---------- 版本时间戳：每次修改代码时手动更新这一行，方便部署时核对版本 ----------
+BOT_VERSION = "2026-08-12 v1"
+
 
 def now_sgt() -> datetime:
     return datetime.now(SGT)
@@ -352,6 +355,8 @@ async def auto_jail_enforcer():
 @bot.event
 async def on_ready():
     print(f'帝国监察系统已启动: {bot.user}')
+    print(f'当前运行版本: {BOT_VERSION}，启动时间(SGT): {now_sgt().strftime("%Y-%m-%d %H:%M:%S")}')
+    bot.startup_time_sgt = now_sgt().strftime("%Y-%m-%d %H:%M:%S")
     auto_jail_enforcer.start()
     spot_check_release.start()
 
@@ -442,6 +447,12 @@ async def interrogate(ctx, member: discord.Member, change: int):
         await ctx.send(f"{member.mention} 当前表现分：{score}")
     else:
         await ctx.send("此人不在牢房中。")
+
+
+@bot.command(name='版本')
+async def version_check(ctx):
+    startup_time = getattr(bot, 'startup_time_sgt', '（未知，Bot可能刚重启）')
+    await ctx.send(f"当前运行版本：**{BOT_VERSION}**\n本次启动时间(SGT)：{startup_time}")
 
 
 @bot.command(name='打卡')
