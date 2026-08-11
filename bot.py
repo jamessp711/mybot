@@ -6,16 +6,16 @@ import discord
 from discord.ext import commands, tasks
 import sys
 
-# 假设你用的google-genai库
-from google_genai import Client
+# 引入正确的google-genai库
+from google.genai import Client
 
 # 加载环境变量
 load_dotenv()
 
-TOKEN = os.getenv('MTUzMjcxODI4NjU5MTIzNDEyOQ.GMbf-H.wwqfdzEjyFaMiE7vhfuLNQHWKEodAiqPVfw2lM')
+TOKEN = os.getenv('DISCORD_TOKEN')
 TOKEN_LAST_CHANGED_STR = os.getenv('TOKEN_LAST_CHANGED', '2026-08-10')
 TOKEN_VALID_DAYS = 30
-GOOGLE_GENAI_API_KEY = os.getenv('AQ.Ab8RN6LcVEVINPJpueMwFQf1nuJRW9SCF9F-6VA8mb49R6B_0g')
+GOOGLE_GENAI_API_KEY = os.getenv('GOOGLE_GENAI_API_KEY')
 
 DB_FILE = 'prison_records.json'
 PRISON_START_HOUR = 22
@@ -115,7 +115,7 @@ async def imprison(ctx, member: discord.Member, years: int):
     embed.add_field(name="刑期", value=f"{years} 年 (折合 {nights} 晚)")
     embed.add_field(name="预计释放时间", value=release_date.strftime("%Y-%m-%d %H:%M"))
     await ctx.send(embed=embed)
-    log_channel = discord.utils.get(ctx.guild.channels, name=ROLE_LOG)
+    log_channel = discord.utils.get(guild.channels if 'guild' in locals() else ctx.guild.channels, name=ROLE_LOG)
     if log_channel:
         await log_channel.send(f"【国法处置】{member.name} 被判处 {years} 年。")
 
@@ -145,16 +145,14 @@ async def checkin(ctx):
     else:
         await ctx.send("非打卡时间，勤加改造！")
 
-# 新增智能聊天命令，调用google-genai
+# 智能聊天命令，修正为google-genai的标准调用
 @bot.command(name='chat')
 async def chat(ctx, *, message: str):
     """用google-genai生成回复"""
     try:
-        response = genai_client.generate_text(
-            model="chat-bison-001",
-            prompt=message,
-            temperature=0.7,
-            max_tokens=200
+        response = genai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=message,
         )
         await ctx.send(response.text)
     except Exception as e:
