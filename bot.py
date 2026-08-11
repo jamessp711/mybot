@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands, tasks
 import sys
 
-from google.genai import Client
+from google import genai
 
 # ============================================================
 # 基础设置
@@ -64,7 +64,7 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-genai_client = Client(api_key=GOOGLE_GENAI_API_KEY)
+genai_client = genai.Client(api_key=GOOGLE_GENAI_API_KEY)
 
 
 # ---------- 数据存取 ----------
