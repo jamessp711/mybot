@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands, tasks
 import sys
 
-from google import genai
+from google.genai import Client
 
 # ============================================================
 # 基础设置
@@ -31,6 +31,7 @@ YEARS_PER_NIGHT = 2
 SENTENCING_GRACE_MINUTES = 30
 WEEKEND_PAUSE_WEEKDAYS = (4, 5)  # 周五=4, 周六=5 (Python weekday())
 MAX_SINGLE_SENTENCE_YEARS = 16   # 单次判决绝对天花板，任何情况不可超过
+MAX_RITUAL_STRIKES = 16          # 仪式性"掌嘴/认错"次数上限，24视为"极刑"，代码层面永不触发
 
 ROLE_ISOLATION = '绝对隔离牢房'
 ROLE_LOG = 'punishmentlog-room'
@@ -64,7 +65,7 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-genai_client = genai.Client(api_key=GOOGLE_GENAI_API_KEY)
+genai_client = Client(api_key=GOOGLE_GENAI_API_KEY)
 
 
 # ---------- 数据存取 ----------
@@ -94,7 +95,9 @@ def save_spot(data):
 
 prisoners = load_data()
 spot_checks = load_spot()
-PENDING_RITUAL = {}  # {user_id: "kneel" / "confess"}
+PENDING_RITUAL = {}    # {user_id: "kneel" / "confess"}
+PENDING_VERDICT = {}   # {user_id: {article, years, law_detail, reason, expires_at, ...}}
+PLEA_WINDOW_MINUTES = 3  # 法庭陈述窗口，稀缺且不可自行申请开启
 
 
 # ============================================================
@@ -401,11 +404,25 @@ async def imprison(ctx, member: discord.Member, years: int, mode: str = "new"):
 
     embed = make_verdict_embed(member, years, nights, release_dt)
     embed.add_field(name="量刑说明", value=verdict_note, inline=False)
+
+    # 依【第六条·鞭刑仪式】：4年以上触发认错仪式，次数=年数，封顶MAX_RITUAL_STRIKES
+    ritual_strikes = 0
+    if years >= 4:
+        ritual_strikes = min(years, MAX_RITUAL_STRIKES)
+        embed.add_field(
+            name="鞭刑仪式",
+            value=f"依第六条，判处认错仪式 **{ritual_strikes}** 次，纯文字性质。",
+            inline=False
+        )
+
     await ctx.send(embed=embed)
 
     log_channel = discord.utils.get(ctx.guild.channels, name=ROLE_LOG)
     if log_channel:
         await log_channel.send(embed=embed)
+
+    if ritual_strikes > 0:
+        await ctx.send(f"{member.mention} 掌嘴 {ritual_strikes} 下！请连续发送 {ritual_strikes} 次「奴才知错」以示悔改。")
 
 
 @bot.command(name='审问')
@@ -443,6 +460,20 @@ async def kneel_order(ctx, member: discord.Member):
     await ctx.send(f"{member.mention} 跪下认罪！在下方回复「奴才知罪」，方可起身。")
 
 
+@bot.command(name='掌嘴')
+@commands.has_permissions(manage_messages=True)
+async def slap_order(ctx, member: discord.Member, times: int = 1):
+    """
+    仪式性认错次数，绝对不涉及任何真实体罚。
+    times 硬性上限为 MAX_RITUAL_STRIKES(16)，超过一律拒绝执行——
+    24这个数字在本系统里永远不会真正触发，只作为理论上的"极刑"象征。
+    """
+    if times > MAX_RITUAL_STRIKES:
+        await ctx.send(f"⚠️ 拒绝执行：{times} 次超出本国法定上限 {MAX_RITUAL_STRIKES} 次，量刑不可如此失控。")
+        return
+    await ctx.send(f"{member.mention} 掌嘴 {times} 下！请连续发送 {times} 次「奴才知错」以示悔改。")
+
+
 # ============================================================
 # 核心：不需要指令，直接对话 + 女王依法裁决
 # ============================================================
@@ -472,7 +503,15 @@ async def on_message(message):
 
     is_mentioned = bot.user in message.mentions
     is_dm = isinstance(message.channel, discord.DMChannel)
-    if not (is_mentioned or is_dm):
+    # 不再要求必须被@才回应——女王本就尊贵，不需要被召唤才肯开口，
+    # 她本就该一直在场旁观。但不代表每句话都要她开口，
+    # 是否回应交给她自己判断(见下方 action:"silent" 选项)。
+    monitored_channel_names = ("general",)  # punishmentlog-room是单向公告栏，奴才不可发言，不需要监听
+    in_monitored_channel = (
+        isinstance(message.channel, discord.TextChannel)
+        and message.channel.name in monitored_channel_names
+    )
+    if not (is_mentioned or is_dm or in_monitored_channel):
         return
 
     user_text = content
@@ -507,6 +546,10 @@ async def on_message(message):
 
 如果只是正常回应，只输出：
 {{"action": "reply", "text": "你的回应内容"}}
+
+如果这只是无关紧要的闲聊、不值得你开口（比如单纯的表情、无意义短语），
+你可以选择沉默旁观，只输出：
+{{"action": "silent"}}
 """
 
     async with message.channel.typing():
@@ -551,12 +594,25 @@ async def on_message(message):
         embed.add_field(name="援引法条", value=detail, inline=False)
         embed.add_field(name="判决理由", value=decision.get('reason', ''), inline=False)
 
+        ritual_strikes = 0
+        if chosen_years >= 4:
+            ritual_strikes = min(chosen_years, MAX_RITUAL_STRIKES)
+            embed.add_field(
+                name="鞭刑仪式",
+                value=f"依第六条，判处认错仪式 **{ritual_strikes}** 次，纯文字性质。",
+                inline=False
+            )
+
         log_channel = discord.utils.get(message.guild.channels, name=ROLE_LOG)
         if log_channel:
             await log_channel.send(embed=embed)
+            if ritual_strikes > 0:
+                await log_channel.send(f"{message.author.mention} 掌嘴 {ritual_strikes} 下！请连续发送 {ritual_strikes} 次「奴才知错」以示悔改。")
         # 突击判决时女王刻意沉默，不在原对话回复文字
 
     else:
+        if decision.get('action') == 'silent':
+            return  # 女王选择旁观，不开口，但不代表没在看
         await message.reply(decision.get('text', '……'))
 
 
