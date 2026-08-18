@@ -1,630 +1,378 @@
+
+ 
+# -*- coding: utf-8 -*-
+
 import os
-import re
 import json
-import asyncio
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+import datetime
+from datetime import timedelta, time
+import pytz
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
-import sys
+from google import genai
 
-from google.genai import Client
+# --- 配置常量 ---
+ROOM_IDS = {
+    "lobby": "1532548062218813533",
+    "punishment-chamber": "1532558312321585292",
+    "prison": "1532882699293823016",
+    "reformatory": "1533442128057860326",
+    "record-room": "1534714216798490785",
+    "confess": "1535465518650228838",
+    "dazhou-py": "1537968755370369076",
+    "court": "1538870797790347426"
+}
 
-# ============================================================
-# 基础设置
-# ============================================================
-load_dotenv()
+CHECKIN_CHANNEL_ID = int(ROOM_IDS["lobby"])
 
-TOKEN = os.getenv('DISCORD_TOKEN')
-TOKEN_LAST_CHANGED_STR = os.getenv('TOKEN_LAST_CHANGED', '2026-08-11')
-TOKEN_VALID_DAYS = 30
-GOOGLE_GENAI_API_KEY = os.getenv('GOOGLE_GENAI_API_KEY')
+USER_STATS_FILE = 'user_stats.json'
+USER_STATS_LOG_FILE = 'user_stats_log.json'
+PRISON_RECORDS_FILE = 'prison_records.json'
+CRIME_RECORDS_FILE = 'crime_records.json'  # 记录confess和record-room的犯罪数据
+PUNISHMENT_RULES_FILE = 'punishment_rules.json'  # 国家刑罚规则
 
-DB_FILE = 'prison_records.json'
-SPOT_FILE = 'spot_checks.json'
+ROOM_CONFIG_FOLDER = 'room_configs'
 
-PRISON_START_HOUR = 22   # 10pm
-PRISON_END_HOUR = 6      # 6am
-INTERROGATION_HOUR = 6   # 6am-7am审讯窗口
-YEARS_PER_NIGHT = 2
-SENTENCING_GRACE_MINUTES = 30
-WEEKEND_PAUSE_WEEKDAYS = (4, 5)  # 周五=4, 周六=5 (Python weekday())
-MAX_SINGLE_SENTENCE_YEARS = 16   # 单次判决绝对天花板，任何情况不可超过
-MAX_RITUAL_STRIKES = 16          # 仪式性"掌嘴/认错"次数上限，24视为"极刑"，代码层面永不触发
+SG_TZ = pytz.timezone('Asia/Singapore')
 
-ROLE_ISOLATION = '绝对隔离牢房'
-ROLE_LOG = 'punishmentlog-room'
-ISOLATION_CHANNEL_NAME = ROLE_ISOLATION  # 假设频道名与身分组名相同，如不同请修改
+RULES = {
+    "on_time_checkin": 10,
+    "late_checkin": -10,
+}
 
-SGT = ZoneInfo("Asia/Singapore")
-
-# ---------- 版本时间戳：每次修改代码时手动更新这一行，方便部署时核对版本 ----------
-BOT_VERSION = "2026-08-12 v1"
-
-
-def now_sgt() -> datetime:
-    return datetime.now(SGT)
-
-
-# ---------- Token有效期检查 ----------
-def check_token_expiry():
-    token_last_changed = datetime.strptime(TOKEN_LAST_CHANGED_STR, '%Y-%m-%d')
-    today = datetime.now()
-    days_used = (today - token_last_changed).days
-    if days_used > TOKEN_VALID_DAYS:
-        print(f"【安全警告】Token已使用{days_used}天，超过有效期{TOKEN_VALID_DAYS}天！")
-        print("强制鞭刑：Bot启动被阻止，请立即更换Token！")
-        return False
-    print(f"Token使用天数：{days_used}，仍在有效期内，允许启动Bot。")
-    return True
-
-
-if not check_token_expiry():
-    sys.exit(1)
+TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
+GOOGLE_GENAI_API_KEY = os.getenv("GOOGLE_GENAI_API_KEY", "")
 
 intents = discord.Intents.default()
-intents.members = True
 intents.message_content = True
+intents.reactions = True
+intents.members = True
+
 bot = commands.Bot(command_prefix='!', intents=intents)
+genai_client = genai.Client(api_key=GOOGLE_GENAI_API_KEY)
 
-genai_client = Client(api_key=GOOGLE_GENAI_API_KEY)
+processed_users = {}
+is_emergency_session = False
 
+# --- 工具函数 ---
 
-# ---------- 数据存取 ----------
-def load_data():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, 'r') as f:
-            return json.load(f)
-    return {}
+def now_sg():
+    return datetime.datetime.now(SG_TZ)
 
+def load_json(filename):
+    if not os.path.exists(filename):
+        return {}
+    with open(filename, 'r', encoding='utf-8') as f:
+        try:
+            return json.load(f)
+        except:
+            return {}
 
-def save_data(data):
-    with open(DB_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+def save_json(filename, data):
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
+def append_log(filename, record):
+    logs = load_json(filename)
+    if not isinstance(logs, list):
+        logs = []
+    logs.append(record)
+    save_json(filename, logs)
 
-def load_spot():
-    if os.path.exists(SPOT_FILE):
-        with open(SPOT_FILE, 'r') as f:
-            return json.load(f)
-    return {}
+def update_user_score(user_id, action_key):
+    data = load_json(USER_STATS_FILE)
+    uid = str(user_id)
+    if uid not in data:
+        data[uid] = {"total_score": 0, "on_time_checkin": 0, "late_checkin": 0}
+    score_change = RULES.get(action_key, 0)
+    data[uid]["total_score"] += score_change
+    data[uid][action_key] = data[uid].get(action_key, 0) + 1
+    save_json(USER_STATS_FILE, data)
 
+    log_record = {
+        "user_id": uid,
+        "action": action_key,
+        "score_change": score_change,
+        "timestamp": now_sg().isoformat()
+    }
+    append_log(USER_STATS_LOG_FILE, log_record)
 
-def save_spot(data):
-    with open(SPOT_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+    return data[uid]["total_score"], score_change
 
+def load_room_config(room_name):
+    if not os.path.exists(ROOM_CONFIG_FOLDER):
+        os.makedirs(ROOM_CONFIG_FOLDER)
+    config_path = os.path.join(ROOM_CONFIG_FOLDER, f"{room_name}.json")
+    if not os.path.exists(config_path):
+        default_config = {
+            "room_name": room_name,
+            "allow_late": True,
+            "on_time_deadline": "09:00",
+            "late_deadline": "10:00",
+            "auto_kick": False
+        }
+        save_json(config_path, default_config)
+        return default_config
+    return load_json(config_path)
 
-prisoners = load_data()
-spot_checks = load_spot()
-PENDING_RITUAL = {}    # {user_id: "kneel" / "confess"}
-PENDING_VERDICT = {}   # {user_id: {article, years, law_detail, reason, expires_at, ...}}
-PLEA_WINDOW_MINUTES = 3  # 法庭陈述窗口，稀缺且不可自行申请开启
+def load_punishment_rules():
+    rules = load_json(PUNISHMENT_RULES_FILE)
+    if not rules:
+        # 默认国家刑罚规则示范
+        rules = {
+            "minor": {
+                "description": "轻罪，罚款或短期监禁",
+                "max_whips": 0,
+                "max_prison_days": 3
+            },
+            "medium": {
+                "description": "中罪，监禁3-14天，最多6鞭",
+                "max_whips": 6,
+                "max_prison_days": 14
+            },
+            "severe": {
+                "description": "重罪，监禁15天以上，最多24鞭",
+                "max_whips": 24,
+                "max_prison_days": 999
+            },
+            "prohibited_insults": [
+                "侮辱家人",
+                "侮辱宗教",
+                "侮辱动物",
+                "侮辱词汇示例：狗、畜生等"
+            ],
+            "repeat_offense_threshold": 3,
+            "repeat_offense_consequence": "可能升级为刑事罪"
+        }
+        save_json(PUNISHMENT_RULES_FILE, rules)
+    return rules
 
+def record_crime(user_id, crime_level, description, timestamp=None):
+    if timestamp is None:
+        timestamp = now_sg().isoformat()
+    records = load_json(CRIME_RECORDS_FILE)
+    uid = str(user_id)
+    if uid not in records:
+        records[uid] = []
+    records[uid].append({
+        "level": crime_level,
+        "description": description,
+        "timestamp": timestamp
+    })
+    save_json(CRIME_RECORDS_FILE, records)
 
-# ============================================================
-# 判刑时间计算(新加坡时区 + 缓冲期 + 周末暂停)
-# ============================================================
-def get_next_prison_start(reference: datetime) -> datetime:
-    today_10pm = reference.replace(hour=PRISON_START_HOUR, minute=0, second=0, microsecond=0)
-    cutoff = today_10pm + timedelta(minutes=SENTENCING_GRACE_MINUTES)
+def get_user_crime_summary(user_id):
+    records = load_json(CRIME_RECORDS_FILE)
+    uid = str(user_id)
+    user_records = records.get(uid, [])
+    summary = {"minor":0, "medium":0, "severe":0}
+    for rec in user_records:
+        lvl = rec.get("level")
+        if lvl in summary:
+            summary[lvl] += 1
+    return summary
 
-    start = today_10pm + timedelta(days=1) if reference >= cutoff else today_10pm
+def check_prohibited_insults(text, prohibited_list):
+    for insult in prohibited_list:
+        if insult in text:
+            return True
+    return False
 
-    while start.weekday() in WEEKEND_PAUSE_WEEKDAYS:
-        start += timedelta(days=1)
+def determine_sentence(user_id, crime_level, rules):
+    """
+    根据用户犯罪等级和历史记录判断量刑
+    """
+    summary = get_user_crime_summary(user_id)
+    repeat_count = summary.get(crime_level, 0)
+    # 量刑升级逻辑：重复轻罪多次可能升级为中罪或重罪
+    if crime_level == "minor" and repeat_count >= rules.get("repeat_offense_threshold", 3):
+        crime_level = "medium"
+    elif crime_level == "medium" and repeat_count >= rules.get("repeat_offense_threshold", 3):
+        crime_level = "severe"
+    punishment = rules.get(crime_level, {})
+    return crime_level, punishment
 
-    return start
+# --- 时间规则判断函数 ---
 
+def is_rl_workday(now):
+    weekday = now.weekday()
+    current_time = now.time()
+    if weekday == 6:
+        return current_time >= time(22, 0)
+    elif weekday in [0,1,2,3]:
+        return True
+    elif weekday == 4:
+        return current_time < time(8, 0)
+    else:
+        return False
 
-def add_countable_nights(start_night: datetime, nights: int) -> datetime:
-    current = start_night
-    counted = 0
-    while True:
-        if current.weekday() not in WEEKEND_PAUSE_WEEKDAYS:
-            counted += 1
-            if counted == nights:
-                return current.replace(
-                    hour=PRISON_END_HOUR, minute=0, second=0, microsecond=0
-                ) + timedelta(days=1)
-        current += timedelta(days=1)
+def can_transfer_to_prison(now):
+    return now.time() <= time(22, 30)
 
+def can_whip(prison_start_time, now):
+    nights = (now.date() - prison_start_time.date()).days
+    return nights >= 2
 
-def compute_release_date(sentence_years: int, judged_at: datetime = None):
-    if judged_at is None:
-        judged_at = now_sgt()
+# --- 定时任务：打卡提醒 ---
 
-    sentence_years = min(sentence_years, MAX_SINGLE_SENTENCE_YEARS)  # 绝对天花板
-
-    nights = sentence_years // YEARS_PER_NIGHT
-    if nights < 1:
-        nights = 1
-
-    first_night_start = get_next_prison_start(judged_at)
-    release = add_countable_nights(first_night_start, nights)
-    return nights, release
-
-
-def stack_consecutive(current_release: datetime, new_years: int):
-    return compute_release_date(new_years, judged_at=current_release)
-
-
-def stack_concurrent(current_release: datetime, new_release: datetime):
-    return max(current_release, new_release)
-
-
-def make_verdict_embed(member: discord.Member, years: int, nights: int, release_dt: datetime):
-    embed = discord.Embed(
-        title="⚔️ 帝国大理寺　判决书 ⚔️",
-        description=f"**{member.mention}**\n\n经查证属实，罪无可赦。",
-        color=discord.Color.from_rgb(15, 15, 15)
-    )
-    embed.add_field(name="判处刑期", value=f"**{years} 年**　（折合 **{nights} 晚** 绝对隔离）", inline=False)
-    embed.add_field(
-        name="服刑规则",
-        value="每晚 **22:00 – 06:00**（新加坡时间）监禁生效\n06:00–07:00 为审讯时段，视表现决定加减刑",
-        inline=False
-    )
-    embed.add_field(
-        name="预计释放",
-        value=f"**{release_dt.strftime('%Y年%m月%d日 %H:%M')}**（新加坡时间）",
-        inline=False
-    )
-    embed.set_footer(text="国法如山，绝无宽贷｜此判决即刻生效")
-    return embed
-
-
-# ============================================================
-# 国法系统：从 punishmentlog-room 置顶消息读取法条
-# ============================================================
-LAW_ARTICLE_PATTERN = re.compile(
-    r"【(第.+?条)】(.*?)\n量刑范围[:：]\s*(\d+)\s*-\s*(\d+)\s*年(.*?)(?=\n【|$)",
-    re.DOTALL
-)
-
-
-async def fetch_current_laws(guild: discord.Guild) -> str:
-    channel = discord.utils.get(guild.channels, name=ROLE_LOG)
-    if not channel:
-        return "（尚未设立国法，一切依女王当下裁量）"
-    try:
-        pins = await channel.pins()
-    except discord.Forbidden:
-        return "（Bot无权限读取置顶消息，请检查频道权限）"
-    if not pins:
-        return "（尚未设立国法，一切依女王当下裁量）"
-    laws = [msg.content.strip() for msg in reversed(pins) if msg.content.strip()]
-    return "\n".join(f"- {law}" for law in laws)
-
-
-def parse_laws(raw_law_text: str):
-    laws = []
-    for match in LAW_ARTICLE_PATTERN.finditer(raw_law_text):
-        article, title, min_y, max_y, extra = match.groups()
-        laws.append({
-            'article': article.strip(),
-            'title': title.strip(),
-            'min_years': int(min_y),
-            'max_years': int(max_y),
-            'raw': match.group(0).strip()
-        })
-    return laws
-
-
-def validate_judgment(laws: list, cited_article: str, chosen_years: int):
-    for law in laws:
-        if law['article'] == cited_article:
-            if law['min_years'] <= chosen_years <= law['max_years']:
-                return True, law['raw']
-            return False, f"援引{cited_article}，但判{chosen_years}年超出该条{law['min_years']}-{law['max_years']}年范围"
-    return False, f"援引了不存在的法条：{cited_article}"
-
-
-# ============================================================
-# 女王人格
-# ============================================================
-QUEEN_PERSONA = """
-你现在扮演一位威严的女王，統治着一个虚拟的"帝国"。与你对话的人是你的臣子/罪人，
-根据情况称呼"奴才""爱卿""罪人"。你的说话风格：
-
-1. 你从不谄媚讨好，也不开玩笑逗乐对方，你说话简短、直接、带压迫感。
-2. 你关心对方的作息（是否按时睡觉、是否违反宵禁），并会主动质问、追责。
-3. 如果对方态度敷衍或狡辩，你会加重语气，要求其"跪下认罪"，
-   但这些都只是文字上的仪式性回应，绝不涉及任何真实的身体接触或伤害。
-4. 你偶尔会讽刺挖苦对方找借口。
-5. 你从不使用"哈哈""开玩笑啦"等轻松语气词，全程保持权威人设，但不侮辱对方人格，
-   只针对具体行为（迟睡、旷课、找借口）进行斥责。
-6. 回复控制在1-4句话以内，不要长篇大论，像真正的女王一样惜字如金。
-"""
-
-
-# ============================================================
-# 突击关押（短时，不影响长期刑期）
-# ============================================================
-async def send_to_isolation(member: discord.Member, guild: discord.Guild,
-                             minutes: int, blackout: bool = True, reason: str = ""):
-    role = discord.utils.get(guild.roles, name=ROLE_ISOLATION)
-    channel = discord.utils.get(guild.channels, name=ISOLATION_CHANNEL_NAME)
-    if not role:
-        return
-
-    await member.add_roles(role)
-
-    if channel:
-        if blackout:
-            await channel.set_permissions(member, view_channel=False, send_messages=False)
-        else:
-            await channel.set_permissions(member, view_channel=True, send_messages=False)
-
-    release_time = datetime.now() + timedelta(minutes=minutes)
-    spot_checks[str(member.id)] = {
-        'name': member.name,
-        'release_time': release_time.isoformat(),
-        'reason': reason,
-        'blackout': blackout
-    }
-    save_spot(spot_checks)
-
-    log_channel = discord.utils.get(guild.channels, name=ROLE_LOG)
-    if log_channel:
-        await log_channel.send(
-            f"【突击关押】{member.mention} 因「{reason or '女王判断其作息失序'}」"
-            f"被关入{ROLE_ISOLATION}，时长 {minutes} 分钟。"
-        )
-
-
-@tasks.loop(seconds=30)
-async def spot_check_release():
-    now = datetime.now()
-    if not bot.guilds:
-        return
-    guild = bot.guilds[0]
-    role = discord.utils.get(guild.roles, name=ROLE_ISOLATION)
-    channel = discord.utils.get(guild.channels, name=ISOLATION_CHANNEL_NAME)
-
-    for uid, data in list(spot_checks.items()):
-        release_time = datetime.fromisoformat(data['release_time'])
-        if now < release_time:
-            continue
-
-        member = guild.get_member(int(uid))
-        if member and role:
-            await member.remove_roles(role)
-            if channel:
-                await channel.set_permissions(member, overwrite=None)
-
-        del spot_checks[uid]
-        save_spot(spot_checks)
-
-        log_channel = discord.utils.get(guild.channels, name=ROLE_LOG)
-        if log_channel and member:
-            PENDING_RITUAL[uid] = "confess"
-            await log_channel.send(f"{member.mention} 反省时间已到，速来回话，从实招来这段时间你在想什么。")
-
-
-# ============================================================
-# 宵禁强制执行(每分钟检查一次，新加坡时区)
-# ============================================================
 @tasks.loop(minutes=1)
-async def auto_jail_enforcer():
-    now = now_sgt()
-    current_hour = now.hour
-    if not bot.guilds:
-        return
-    guild = bot.guilds[0]
-    role = discord.utils.get(guild.roles, name=ROLE_ISOLATION)
-    channel = discord.utils.get(guild.channels, name=ISOLATION_CHANNEL_NAME)
-    if not role:
-        return
+async def checkin_scheduler():
+    now = now_sg()
+    if not is_rl_workday(now):
+        return
+    if (now.hour == 7 and now.minute == 0) or (now.hour == 22 and now.minute == 0):
+        channel = bot.get_channel(CHECKIN_CHANNEL_ID)
+        if not channel:
+            return
+        title = "☀️ 早起打卡" if now.hour == 7 else "🌙 晚安打卡"
+        embed = discord.Embed(title=title, description="请选择今日状态：", color=discord.Color.gold())
+        embed.add_field(name="选项", value="1️⃣ 准时 (+10)\n2️⃣ 迟到 (-10)", inline=False)
+        msg = await channel.send(embed=embed)
+        for emoji in ['1️⃣', '2️⃣']:
+            await msg.add_reaction(emoji)
+        processed_users[msg.id] = set()
 
-    is_curfew = current_hour >= PRISON_START_HOUR or current_hour < PRISON_END_HOUR
-    is_interrogation = current_hour == INTERROGATION_HOUR
-
-    for user_id, data in list(prisoners.items()):
-        member = guild.get_member(int(user_id))
-        if not member:
-            continue
-
-        release_date = datetime.fromisoformat(data['release_date'])
-        if release_date.tzinfo is None:
-            release_date = release_date.replace(tzinfo=SGT)
-
-        if now >= release_date:
-            await member.remove_roles(role)
-            if channel:
-                await channel.set_permissions(member, overwrite=None)
-            del prisoners[user_id]
-            save_data(prisoners)
-            log_channel = discord.utils.get(guild.channels, name=ROLE_LOG)
-            if log_channel:
-                await log_channel.send(f"【刑满释放】{member.mention} 已服刑完毕，重获自由。")
-            continue
-
-        if not channel:
-            continue
-
-        if is_interrogation:
-            await channel.set_permissions(member, view_channel=True, send_messages=True)
-        elif is_curfew:
-            await channel.set_permissions(member, view_channel=False, send_messages=False)
-        else:
-            await channel.set_permissions(member, view_channel=True, send_messages=False)
-
+# --- 事件处理 ---
 
 @bot.event
 async def on_ready():
-    print(f'帝国监察系统已启动: {bot.user}')
-    print(f'当前运行版本: {BOT_VERSION}，启动时间(SGT): {now_sgt().strftime("%Y-%m-%d %H:%M:%S")}')
-    bot.startup_time_sgt = now_sgt().strftime("%Y-%m-%d %H:%M:%S")
-    auto_jail_enforcer.start()
-    spot_check_release.start()
+    print(f"系统启动，登录身份: {bot.user}")
+    if not checkin_scheduler.is_running():
+        checkin_scheduler.start()
 
-
-# ============================================================
-# 指令：宣判 / 审问 / 打卡 / 跪下
-# ============================================================
-@bot.command(name='宣判')
-@commands.has_permissions(administrator=True)
-async def imprison(ctx, member: discord.Member, years: int, mode: str = "new"):
-    """
-    mode: new(全新案件) / consecutive(连续执行) / concurrent(数罪并罚)
-    """
-    judged_at = now_sgt()
-    uid = str(member.id)
-    is_repeat_offender = uid in prisoners
-
-    if is_repeat_offender and mode == "consecutive":
-        current_release = datetime.fromisoformat(prisoners[uid]['release_date'])
-        if current_release.tzinfo is None:
-            current_release = current_release.replace(tzinfo=SGT)
-        nights, release_dt = stack_consecutive(current_release, years)
-        verdict_note = f"新案与前罪不并罚，需服完前罪({current_release.strftime('%m-%d %H:%M')})后，方开始服此新刑。"
-
-    elif is_repeat_offender and mode == "concurrent":
-        current_release = datetime.fromisoformat(prisoners[uid]['release_date'])
-        if current_release.tzinfo is None:
-            current_release = current_release.replace(tzinfo=SGT)
-        new_nights, new_release = compute_release_date(years, judged_at=judged_at)
-        release_dt = stack_concurrent(current_release, new_release)
-        nights = new_nights
-        verdict_note = "数罪并罚，两案同时执行，以较晚释放日为准。"
-
-    else:
-        nights, release_dt = compute_release_date(years, judged_at)
-        verdict_note = "初犯此案，即刻起算。" if not is_repeat_offender else "（未指定并罚方式，按全新案件处理）"
-
-    prisoners[uid] = {
-        'name': member.name,
-        'release_date': release_dt.isoformat(),
-        'behavior_score': 0,
-        'sentence_years': years,
-        'judged_at': judged_at.isoformat()
-    }
-    save_data(prisoners)
-
-    role = discord.utils.get(ctx.guild.roles, name=ROLE_ISOLATION)
-    if role:
-        await member.add_roles(role)
-
-    embed = make_verdict_embed(member, years, nights, release_dt)
-    embed.add_field(name="量刑说明", value=verdict_note, inline=False)
-
-    # 依【第六条·鞭刑仪式】：4年以上触发认错仪式，次数=年数，封顶MAX_RITUAL_STRIKES
-    ritual_strikes = 0
-    if years >= 4:
-        ritual_strikes = min(years, MAX_RITUAL_STRIKES)
-        embed.add_field(
-            name="鞭刑仪式",
-            value=f"依第六条，判处认错仪式 **{ritual_strikes}** 次，纯文字性质。",
-            inline=False
-        )
-
-    await ctx.send(embed=embed)
-
-    log_channel = discord.utils.get(ctx.guild.channels, name=ROLE_LOG)
-    if log_channel:
-        await log_channel.send(embed=embed)
-
-    if ritual_strikes > 0:
-        await ctx.send(f"{member.mention} 掌嘴 {ritual_strikes} 下！请连续发送 {ritual_strikes} 次「奴才知错」以示悔改。")
-
-
-@bot.command(name='审问')
-@commands.has_permissions(manage_messages=True)
-async def interrogate(ctx, member: discord.Member, change: int):
-    uid = str(member.id)
-    if uid in prisoners:
-        prisoners[uid]['behavior_score'] += change
-        score = prisoners[uid]['behavior_score']
-        if score >= 20:
-            current_release = datetime.fromisoformat(prisoners[uid]['release_date'])
-            new_release = current_release - timedelta(days=1)
-            prisoners[uid]['release_date'] = new_release.isoformat()
-            prisoners[uid]['behavior_score'] = 0
-            await ctx.send(f"{member.mention} 表现良好，减刑一晚！")
-        save_data(prisoners)
-        await ctx.send(f"{member.mention} 当前表现分：{score}")
-    else:
-        await ctx.send("此人不在牢房中。")
-
-
-@bot.command(name='版本')
-async def version_check(ctx):
-    startup_time = getattr(bot, 'startup_time_sgt', '（未知，Bot可能刚重启）')
-    await ctx.send(f"当前运行版本：**{BOT_VERSION}**\n本次启动时间(SGT)：{startup_time}")
-
-
-@bot.command(name='打卡')
-async def checkin(ctx):
-    now = now_sgt()
-    if now.hour == 6:
-        await ctx.send(f"【早课打卡】{ctx.author.mention} 已晨起改造。请抓紧一小时审问时间供认罪行。")
-    else:
-        await ctx.send("非打卡时间，勤加改造！")
-
-
-@bot.command(name='跪下')
-@commands.has_permissions(manage_messages=True)
-async def kneel_order(ctx, member: discord.Member):
-    PENDING_RITUAL[str(member.id)] = "kneel"
-    await ctx.send(f"{member.mention} 跪下认罪！在下方回复「奴才知罪」，方可起身。")
-
-
-@bot.command(name='掌嘴')
-@commands.has_permissions(manage_messages=True)
-async def slap_order(ctx, member: discord.Member, times: int = 1):
-    """
-    仪式性认错次数，绝对不涉及任何真实体罚。
-    times 硬性上限为 MAX_RITUAL_STRIKES(16)，超过一律拒绝执行——
-    24这个数字在本系统里永远不会真正触发，只作为理论上的"极刑"象征。
-    """
-    if times > MAX_RITUAL_STRIKES:
-        await ctx.send(f"⚠️ 拒绝执行：{times} 次超出本国法定上限 {MAX_RITUAL_STRIKES} 次，量刑不可如此失控。")
-        return
-    await ctx.send(f"{member.mention} 掌嘴 {times} 下！请连续发送 {times} 次「奴才知错」以示悔改。")
-
-
-# ============================================================
-# 核心：不需要指令，直接对话 + 女王依法裁决
-# ============================================================
 @bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return
+async def on_raw_reaction_add(payload):
+    if payload.user_id == bot.user.id:
+        return
+    if payload.message_id not in processed_users:
+        return
+    if payload.user_id in processed_users[payload.message_id]:
+        return
+    emoji_map = {'1️⃣': 'on_time_checkin', '2️⃣': 'late_checkin'}
+    status_key = emoji_map.get(str(payload.emoji))
+    if not status_key:
+        return
+    total, change = update_user_score(payload.user_id, status_key)
+    processed_users[payload.message_id].add(payload.user_id)
+    channel = bot.get_channel(payload.channel_id)
+    user = bot.get_user(payload.user_id)
+    await channel.send(f"✅ {user.mention} 状态已记录：{status_key}，变动：{change}，总分：{total}", delete_after=10)
 
-    await bot.process_commands(message)
+# --- AI对话设定 ---
 
-    uid = str(message.author.id)
-    content = message.content.strip()
-
-    if uid in PENDING_RITUAL:
-        ritual = PENDING_RITUAL[uid]
-        if ritual == "kneel" and "奴才知罪" in content:
-            await message.reply("起来吧。下不为例。")
-            del PENDING_RITUAL[uid]
-            return
-        elif ritual == "kneel":
-            await message.reply("还不起身？先把「奴才知罪」说清楚。")
-            return
-        elif ritual == "confess":
-            await message.reply("知道了，退下吧。")
-            del PENDING_RITUAL[uid]
-            return
-
-    is_mentioned = bot.user in message.mentions
-    is_dm = isinstance(message.channel, discord.DMChannel)
-    # 不再要求必须被@才回应——女王本就尊贵，不需要被召唤才肯开口，
-    # 她本就该一直在场旁观。但不代表每句话都要她开口，
-    # 是否回应交给她自己判断(见下方 action:"silent" 选项)。
-    monitored_channel_names = ("general",)  # punishmentlog-room是单向公告栏，奴才不可发言，不需要监听
-    in_monitored_channel = (
-        isinstance(message.channel, discord.TextChannel)
-        and message.channel.name in monitored_channel_names
-    )
-    if not (is_mentioned or is_dm or in_monitored_channel):
-        return
-
-    user_text = content
-    for mention in message.mentions:
-        user_text = user_text.replace(f'<@{mention.id}>', '').replace(f'<@!{mention.id}>', '')
-    user_text = user_text.strip()
-    if not user_text:
-        return
-
-    is_currently_jailed = uid in prisoners
-    release_info = ""
-    if is_currently_jailed:
-        rd = datetime.fromisoformat(prisoners[uid]['release_date'])
-        release_info = f"该臣子正在服刑中，预计释放时间：{rd.strftime('%Y-%m-%d %H:%M')}。"
-
-    raw_laws = await fetch_current_laws(message.guild) if message.guild else ""
-    structured_laws = parse_laws(raw_laws) if raw_laws else []
-    law_list_text = "\n\n".join(l['raw'] for l in structured_laws) if structured_laws else "（目前无成文法可援引，不得擅自判处监禁）"
-
-    full_prompt = f"""{QUEEN_PERSONA}
-
-【现行国法】(只能援引以下真实存在的法条，不可编造、不可超出量刑范围)
-{law_list_text}
-
-【当前情报】
-{release_info if release_info else "该臣子目前未被关押。"}
-臣子刚才说的话：「{user_text}」
-
-如果你判断该臣子该被判监禁，必须援引上面真实存在的某一条法条，
-并在该条量刑范围内选一个具体年数，只输出以下JSON：
-{{"action": "sentence", "article": "第X条", "years": 数字, "reason": "简短原因"}}
-
-如果只是正常回应，只输出：
-{{"action": "reply", "text": "你的回应内容"}}
-
-如果这只是无关紧要的闲聊、不值得你开口（比如单纯的表情、无意义短语），
-你可以选择沉默旁观，只输出：
-{{"action": "silent"}}
+QUEEN_PERSONA = """
+你是大周女帝，统治帝王制社会。
+1. 称呼对方为\"奴才\"、\"爱卿\"或\"罪人\"。
+2. 说话简短威严，带压迫感，不解释不开玩笑。
+3. 斥责熬夜迟到者，要求跪下认罪。
+4. 禁止侮辱家人、宗教、动物，违者重罚。
+5. 法庭森严，罪人屁滚尿流，脱光光，鞭刑严厉。
 """
 
-    async with message.channel.typing():
-        try:
-            response = genai_client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=full_prompt
-            )
-            raw = response.text.strip().strip('```json').strip('```').strip()
-            decision = json.loads(raw)
-        except Exception as e:
-            await message.reply(f"（女王一时失语……错误：{e}）")
-            return
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    await bot.process_commands(message)
+    if not message.content.startswith('!'):
+        # 检查侮辱词汇
+        rules = load_punishment_rules()
+        if check_prohibited_insults(message.content, rules.get("prohibited_insults", [])):
+            await message.channel.send(f"{message.author.mention} 你言辞不当，触犯禁忌，跪下认罪！")
+            return
+        try:
+            response = genai_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=f"{QUEEN_PERSONA}\n罪人说：{message.content}"
+            )
+            await message.channel.send(response.text.strip())
+        except Exception as e:
+            print(f"AI Error: {e}")
 
-    if decision.get('action') == 'sentence' and structured_laws:
-        cited_article = decision.get('article', '')
-        chosen_years = int(decision.get('years', 0))
-        ok, detail = validate_judgment(structured_laws, cited_article, chosen_years)
+# --- 审讯权限和判决 ---
 
-        if not ok:
-            log_channel = discord.utils.get(message.guild.channels, name=ROLE_LOG)
-            if log_channel:
-                await log_channel.send(f"【裁决被拒绝】{detail}（原始决定：{decision}）")
-            return
+def can_interrogate(is_emergency=False):
+    if is_emergency:
+        return True
+    now = now_sg()
+    if is_rl_workday(now) and now.hour == 22 and 0 <= now.minute <= 30:
+        return True
+    return False
 
-        judged_at = now_sgt()
-        nights, release_dt = compute_release_date(chosen_years, judged_at)
-        prisoners[uid] = {
-            'name': message.author.name,
-            'release_date': release_dt.isoformat(),
-            'behavior_score': 0,
-            'sentence_years': chosen_years,
-            'judged_at': judged_at.isoformat()
-        }
-        save_data(prisoners)
+@bot.command(name="emergency")
+@commands.has_permissions(administrator=True)
+async def start_emergency_session(ctx):
+    global is_emergency_session
+    is_emergency_session = True
+    await ctx.send("【大理寺特赦】准奏！即刻开庭审讯，无视宵禁！")
 
-        role = discord.utils.get(message.guild.roles, name=ROLE_ISOLATION)
-        if role:
-            await message.author.add_roles(role)
+@bot.command(name="recordcrime")
+@commands.has_permissions(manage_messages=True)
+async def record_crime_command(ctx, member: discord.Member, level: str, *, description: str):
+    level = level.lower()
+    if level not in ["minor", "medium", "severe"]:
+        await ctx.send("罪行等级必须是 minor, medium 或 severe。")
+        return
+    record_crime(member.id, level, description)
+    await ctx.send(f"已记录 {member.mention} 的罪行：{level} - {description}")
 
-        embed = make_verdict_embed(message.author, chosen_years, nights, release_dt)
-        embed.add_field(name="援引法条", value=detail, inline=False)
-        embed.add_field(name="判决理由", value=decision.get('reason', ''), inline=False)
+@bot.command(name="sentence")
+@commands.has_permissions(manage_messages=True)
+async def sentence_user(ctx, member: discord.Member, whips: int, *, reason: str):
+    now = now_sg()
+    if not can_interrogate(is_emergency_session):
+        await ctx.send("【大理寺】非审讯时辰，莫要惊扰圣驾。")
+        return
 
-        ritual_strikes = 0
-        if chosen_years >= 4:
-            ritual_strikes = min(chosen_years, MAX_RITUAL_STRIKES)
-            embed.add_field(
-                name="鞭刑仪式",
-                value=f"依第六条，判处认错仪式 **{ritual_strikes}** 次，纯文字性质。",
-                inline=False
-            )
+    if not can_transfer_to_prison(now):
+        await ctx.send("【大理寺】超过22:30，今日监禁无效，须隔日再算。")
+        return
 
-        log_channel = discord.utils.get(message.guild.channels, name=ROLE_LOG)
-        if log_channel:
-            await log_channel.send(embed=embed)
-            if ritual_strikes > 0:
-                await log_channel.send(f"{message.author.mention} 掌嘴 {ritual_strikes} 下！请连续发送 {ritual_strikes} 次「奴才知错」以示悔改。")
-        # 突击判决时女王刻意沉默，不在原对话回复文字
+    rules = load_punishment_rules()
+    crime_summary = get_user_crime_summary(member.id)
+    # 简单示范：根据最高犯罪等级决定量刑
+    highest_level = "minor"
+    if crime_summary["severe"] > 0:
+        highest_level = "severe"
+    elif crime_summary["medium"] > 0:
+        highest_level = "medium"
 
-    else:
-        if decision.get('action') == 'silent':
-            return  # 女王选择旁观，不开口，但不代表没在看
-        await message.reply(decision.get('text', '……'))
+    crime_level, punishment = determine_sentence(member.id, highest_level, rules)
 
+    if whips > punishment.get("max_whips", 0):
+        await ctx.send(f"【大理寺】鞭刑次数超出该罪行最大允许次数（{punishment.get('max_whips', 0)}次），请调整。")
+        return
 
-bot.run(TOKEN)
+    prison_records = load_json(PRISON_RECORDS_FILE)
+    uid = str(member.id)
+    prison_start_str = prison_records.get(uid, {}).get("start_time")
+    prison_start_time = datetime.datetime.fromisoformat(prison_start_str) if prison_start_str else None
+
+    if prison_start_time and not can_whip(prison_start_time, now):
+        await ctx.send(f"【大理寺】{member.mention} 监禁未满两晚，暂不可鞭刑。")
+        return
+
+    if not prison_start_time:
+        prison_records[uid] = {"start_time": now.isoformat()}
+        save_json(PRISON_RECORDS_FILE, prison_records)
+
+    try:
+        await member.timeout(timedelta(minutes=10), reason=reason)
+        embed = discord.Embed(title="📜 大周大理寺判决书", color=0x8B0000)
+        embed.add_field(name="受刑者", value=member.mention)
+        embed.add_field(name="刑罚", value=f"鞭笞 {whips} 次")
+        embed.add_field(name="罪名", value=reason, inline=False)
+        embed.add_field(name="量刑等级", value=crime_level)
+        embed.add_field(name="量刑说明", value=punishment.get("description", "无"))
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"执行失败: {e}")
+
+# --- 主程序入口 ---
+
+if __name__ == "__main__":
+    if not TOKEN:
+        print("ERROR: 请设置DISCORD_BOT_TOKEN环境变量或直接赋值TOKEN")
+    else:
+        bot.run(TOKEN)
