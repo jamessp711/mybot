@@ -1,0 +1,9 @@
+{
+  "room_name": "prison",
+  "room_id": "1532882699293823016",
+  "open_time": "00:00",
+  "close_time": "23:59",
+  "max_detention_hours": 8,
+  "min_detention_minutes": 1,
+  "description": "因犯错或无礼被扣留，时间1分钟到8小时"
+}

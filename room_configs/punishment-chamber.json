@@ -1,0 +1,10 @@
+{
+  "room_name": "punishment-chamber",
+  "room_id": "1532558312321585292",
+  "open_time": "06:30",
+  "close_time": "07:00",
+  "max_whips": 24,
+  "whip_interval_seconds": 10,
+  "blood_pressure_monitor_minutes": 5,
+  "description": "新加坡鞭刑室，早上6:30-7:00开放，严格仪式感"
+}
