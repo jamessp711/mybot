@@ -1,0 +1,9 @@
+{
+  "room_name": "record-room",
+  "room_id": "1534714216798490785",
+  "open_time": "00:00",
+  "close_time": "23:59",
+  "access_roles": ["judge", "queen"],
+  "description": "存档犯罪记录与判决书，限制访问"
+}
+ 
