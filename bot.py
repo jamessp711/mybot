@@ -1,92 +1,146 @@
-from datetime import datetime, time
+from datetime import datetime, timedelta
 import os
-import pytz
+import random
+import time
 import telebot
 
-# 從環境變數讀取 Telegram Bot Token（安全又不會外洩）
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "你的Telegram_Token")
+# 讀取環境變數中的 Telegram Token
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# 設定時區（新加坡/馬來西亞時區）
-TZ = pytz.timezone("Asia/Singapore")
-
-# 定義精確的法庭開庭時間區段
-# 星期天(6) 到 星期四(3)：21:00 - 22:00
-# 星期一(0) 到 星期五(4)：06:30 - 07:30
-COURT_SCHEDULES = {
-    "night_session": (time(21, 0), time(22, 0), [0, 1, 2, 3, 6]),  # 週日到週四
-    "morning_session": (time(6, 30), time(7, 30), [0, 1, 2, 3, 4]),  # 週一到週五
-}
+# 記憶體資料庫（不使用 Supabase）
+criminal_records = {}  # 記錄每個 user_id 的犯案次數（累犯追蹤）
+lockup_users = {}  # 記錄每個 user_id 的禁閉/審訊解封時間戳記 (timestamp)
 
 
-def is_court_open(now: datetime) -> bool:
-    """檢查當前時間是否在法庭開庭時間內"""
-    current_time = now.time()
-    current_weekday = now.weekday()  # 0是週一，6是週日
+def calculate_tier3_release(days):
+  """計算第一級重罪的監禁結束時間：星期六、日不算入，計算至星期日晚上 10 點"""
+  now = datetime.now()
+  added_days = 0
+  end_time = now
 
-    for session_name, (start, end, allowed_weekdays) in COURT_SCHEDULES.items():
-        if current_weekday in allowed_weekdays:
-            if start <= current_time <= end:
-                return True
-    return False
+  while added_days < days:
+    end_time += timedelta(days=1)
+    # 星期六 (weekday == 5) 與星期日 (weekday == 6) 不算入監禁天數
+    if end_time.weekday() not in [5, 6]:
+      added_days += 1
 
-
-def evaluate_spy_report(report_content: str) -> bool:
-    """法庭審查密探（煦閣）的報告，判斷是否有立案（Have a Case）"""
-    # 這裡未來可以對接 AI 模型；目前先以訊息長度或關鍵字作為簡易判斷
-    if len(report_content.strip()) > 3:
-        return True
-    return False
+  # 強制結算至星期日晚上 10 點 (22:00)
+  return end_time.replace(hour=22, minute=0, second=0)
 
 
-# --- Telegram 訊息處理 ---
-@bot.message_handler(commands=["start", "help"])
+@bot.message_handler(commands=["start"])
 def send_welcome(message):
-    bot.reply_to(
-        message,
-        "【維權帝國司法系統】啟動成功！\n"
-        "煦閣密探正在暗中觀察你的行為……任何訴苦或發言都會被記錄審查。",
-    )
+  bot.reply_to(
+      message,
+      "⚖️ 【維多利亞王國・最高審訊庭】\n"
+      "大門已深鎖。你的每一言每一行，皆已收錄進王國卷宗。\n"
+      "法官正在暗中凝視，準備迎接審判吧。",
+  )
 
 
 @bot.message_handler(func=lambda message: True)
-def handle_user_message(message):
-    user_text = message.text
-    now = datetime.now(TZ)
+def handle_judicial_system(message):
+  user_id = message.from_user.id
+  current_time = time.time()
 
-    # 1. 模擬煦閣密探捕捉到被告行為並生成報告
-    spy_report = f"被告於 {now.strftime('%H:%M')} 傳送了訊息：『{user_text}』"
+  # 1. 攔截機制：檢查被告是否處於禁閉/鎖倉狀態
+  if user_id in lockup_users and current_time < lockup_users[user_id]:
+    remaining = int(lockup_users[user_id] - current_time)
+    mins = remaining // 60
+    secs = remaining % 60
+    bot.reply_to(
+        message,
+        f"⛓️ 【禁閉室鐵律】\n"
+        f"「肅靜！王國的枷鎖尚未鬆開。」\n"
+        f"剩餘盲狙禁閉時間：**{mins} 分 {secs} 秒**。\n"
+        "在此期間膽敢喧嘩者，罪加一等！",
+    )
+    return
 
-    # 2. 法庭進行 Case 立案審查
-    has_case = evaluate_spy_report(user_text)
+  # 2. 累犯與卷宗追蹤（記憶體記錄）
+  record_count = criminal_records.get(user_id, 0)
+  is_repeat = record_count > 0
+  criminal_records[user_id] = record_count + 1
 
-    if not has_case:
-        bot.reply_to(
-            message,
-            f"【煦閣密探觀察報分散】\n{spy_report}\n\n[法庭裁定]：情節輕微，暫無 Case，不予追究。",
-        )
-        return
+  # 3. 判決分流：累犯或隨機有機率觸發重罪/鞭刑，否則為輕罪
+  # 累犯觸發重罪的機率較高
+  is_major = is_repeat and (random.random() > 0.3)
 
-    # 3. Case 成立：發出逮捕令，判斷是否開庭或送進 Lockup
-    court_open = is_court_open(now)
+  if not is_major:
+    # --- 輕罪處理（隨機一項）---
+    minor_options = [
+        (
+            "【輕罪裁決：罰站與羞辱】\n"
+            "法官冷酷下令：剝奪所有王國服飾與尊嚴（全裸受罰），罰站反省！"
+            "（最多 2 分鐘）"
+        ),
+        (
+            "【輕罪裁決：洗廁所】\n"
+            "禁衛軍冷笑：王國地牢深處的馬桶，交給你親自刷洗乾淨。"
+        ),
+        (
+            "【輕罪裁決：罰跪】\n" "大殿石板冰冷，判處當眾罰跪，不得起身！",
+        ),
+    ]
+    chosen_punishment = random.choice(minor_options)
 
-    if court_open:
-        response_msg = (
-            f"🚨 【法庭逮捕令】 🚨\n"
-            f"密探報告：{spy_report}\n\n"
-            f"⚖️ 【法庭裁定】：Case 成立！正值法庭開庭時間，被告當庭受審！"
-        )
+    # 設定盲狙禁閉時間（輕罪最高 2 分鐘 = 120秒，法庭不公開具體秒數）
+    lockup_duration = random.randint(60, 120)
+    lockup_users[user_id] = current_time + lockup_duration
+
+    response = (
+        f"⚖️ 【維多利亞王國・審訊庭宣告】\n"
+        f"被告背景：{'【王國卷宗：累犯】' if is_repeat else '【王國卷宗：初犯】'}\n\n"
+        f"{chosen_punishment}\n\n"
+        f"🔒 法庭已啟動**暗中盲狙倒數**。大門何時開啟，全憑法官心意，休想探知時間！"
+    )
+    bot.reply_to(message, response)
+
+  else:
+    # --- 重罪 / 鞭刑分三級處理 ---
+    tier = random.choice([1, 2, 3])
+
+    if tier == 1:
+      # 最低級
+      lashes = random.randint(1, 6)
+      days = random.randint(2, 3)
+      tier_name = "最低級鞭刑"
+      lockup_users[user_id] = (
+          current_time + 300
+      )  # 測試期間以5分鐘暗中審訊代替
+      time_desc = f"監禁天數：{days} 天"
+    elif tier == 2:
+      # 第二級
+      lashes = random.randint(7, 12)
+      days = random.randint(4, 5)
+      tier_name = "第二級鞭刑"
+      lockup_users[user_id] = current_time + 300
+      time_desc = f"監禁天數：{days} 天"
     else:
-        response_msg = (
-            f"🔒 【法庭逮捕令與留置】 🔒\n"
-            f"密探報告：{spy_report}\n\n"
-            f"⚖️ 【法庭裁定】：Case 成立！非開庭時間，立即送入 **Lockup（留置室）** 關押至少 5 分鐘，"
-            f"並持續監禁至下一個指定的開庭時段為止！"
-        )
+      # 第一級（最嚴格）
+      lashes = random.randint(13, 24)
+      days = random.randint(5, 7)
+      tier_name = "第一級重罪（嚴格鞭刑）"
+      release_dt = calculate_tier3_release(days)
+      # 為了系統安全，這裡記錄實際時間戳記
+      lockup_users[user_id] = release_dt.timestamp()
+      time_desc = (
+          f"監禁天數：{days} 天\n"
+          "⚠️ **特別條款**：星期六、日不算入刑期，刑期計算至星期日晚上 10 點結算！"
+      )
 
-    bot.reply_to(message, response_msg)
+    response = (
+        f"🩸 【維多利亞王國・血色重判】 🩸\n"
+        f"卷宗核對：查明閣下為重大累犯（累計案底：{record_count} 次）！\n"
+        f"判決裁定：**{tier_name}**\n\n"
+        f"⚡ 刑罰內容：執行鞭刑 **{lashes} 下**\n"
+        f"⛓️ 牢獄裁決：{time_desc}\n\n"
+        "「法庭的鐵律不容踐踏。大門已封鎖，在黑暗中好好接受洗禮吧！」"
+    )
+    bot.reply_to(message, response)
 
 
 if __name__ == "__main__":
-    print("Bot is running...")
-    bot.infinity_polling()
+  print("Victoria Kingdom Judicial Bot (In-Memory) is running...")
+  bot.infinity_polling()
