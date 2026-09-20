@@ -1,5 +1,2 @@
-discord.py
-flask
-google-genai
-aiohttp
-python-dotenv
+pyTelegramBotAPI
+pytz
